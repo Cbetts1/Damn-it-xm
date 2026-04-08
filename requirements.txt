@@ -1,0 +1,14 @@
+# AURa Core Requirements
+# The system runs with zero external dependencies out of the box.
+# Optional extras unlock more powerful AI backends.
+
+# ─── OPTIONAL: Hugging Face Transformers backend ────────────────────────────
+# transformers>=4.36.0
+# torch>=2.0.0
+
+# ─── OPTIONAL: OpenAI-compatible API backend (Ollama, LM Studio, etc.) ──────
+# httpx>=0.25.0
+
+# ─── OPTIONAL: Development / testing ────────────────────────────────────────
+# pytest>=7.0
+# pytest-cov>=4.0

@@ -1,0 +1,1 @@
+"""AURa Shell — interactive CLI."""

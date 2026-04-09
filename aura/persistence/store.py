@@ -25,6 +25,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from typing import Any, Dict, Iterator, List, Optional
 
 from aura.utils import get_logger
@@ -58,9 +59,13 @@ class PersistenceEngine:
         Intermediate directories are created automatically.
     """
 
+    # Maximum retries when the database is temporarily locked.
+    _MAX_RETRIES: int = 3
+    _RETRY_BASE_DELAY: float = 0.05  # 50 ms, doubled each retry
+
     def __init__(self, db_path: str) -> None:
         self._db_path = os.path.abspath(db_path)
-        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         self._lock = threading.Lock()
         self._conn = self._connect()
         self._init_schema()
@@ -103,6 +108,21 @@ class PersistenceEngine:
                 """
             )
 
+    def _exec_with_retry(self, fn):
+        """Execute *fn(conn)* under the lock, retrying on ``OperationalError``
+        (e.g. "database is locked") with exponential back-off."""
+        delay = self._RETRY_BASE_DELAY
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            try:
+                with self._lock, self._conn:
+                    return fn(self._conn)
+            except sqlite3.OperationalError as exc:
+                if attempt == self._MAX_RETRIES:
+                    raise
+                _logger.debug("SQLite retry %d/%d: %s", attempt, self._MAX_RETRIES, exc)
+                time.sleep(delay)
+                delay *= 2
+
     # ------------------------------------------------------------------
     # Key-value API
     # ------------------------------------------------------------------
@@ -115,8 +135,9 @@ class PersistenceEngine:
         _validate_name(namespace, "namespace")
         _validate_name(key, "key")
         serialised = json.dumps(value)
-        with self._lock, self._conn:
-            self._conn.execute(
+
+        def _op(conn):
+            conn.execute(
                 """
                 INSERT INTO kv_store (namespace, key, value, updated_at)
                 VALUES (?, ?, ?, datetime('now'))
@@ -126,6 +147,8 @@ class PersistenceEngine:
                 """,
                 (namespace, key, serialised),
             )
+
+        self._exec_with_retry(_op)
 
     def get(self, namespace: str, key: str, default: Any = None) -> Any:
         """Return the value stored at (*namespace*, *key*) or *default*."""
@@ -144,12 +167,17 @@ class PersistenceEngine:
         """Delete the entry at (*namespace*, *key*). Returns True if deleted."""
         _validate_name(namespace, "namespace")
         _validate_name(key, "key")
-        with self._lock, self._conn:
-            cur = self._conn.execute(
+        result = [False]
+
+        def _op(conn):
+            cur = conn.execute(
                 "DELETE FROM kv_store WHERE namespace=? AND key=?",
                 (namespace, key),
             )
-        return cur.rowcount > 0
+            result[0] = cur.rowcount > 0
+
+        self._exec_with_retry(_op)
+        return result[0]
 
     def list_keys(self, namespace: str) -> List[str]:
         """Return all keys in *namespace*."""
@@ -193,8 +221,9 @@ class PersistenceEngine:
         _validate_name(filename, "filename")
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError(f"data must be bytes, got {type(data).__name__}")
-        with self._lock, self._conn:
-            self._conn.execute(
+
+        def _op(conn):
+            conn.execute(
                 """
                 INSERT INTO file_store (namespace, filename, data, size, stored_at)
                 VALUES (?, ?, ?, ?, datetime('now'))
@@ -205,6 +234,8 @@ class PersistenceEngine:
                 """,
                 (namespace, filename, sqlite3.Binary(data), len(data)),
             )
+
+        self._exec_with_retry(_op)
 
     def load_file(self, namespace: str, filename: str) -> Optional[bytes]:
         """Return the raw bytes stored under (*namespace*, *filename*), or None."""
@@ -221,12 +252,17 @@ class PersistenceEngine:
         """Delete a stored file. Returns True if the file existed."""
         _validate_name(namespace, "namespace")
         _validate_name(filename, "filename")
-        with self._lock, self._conn:
-            cur = self._conn.execute(
+        result = [False]
+
+        def _op(conn):
+            cur = conn.execute(
                 "DELETE FROM file_store WHERE namespace=? AND filename=?",
                 (namespace, filename),
             )
-        return cur.rowcount > 0
+            result[0] = cur.rowcount > 0
+
+        self._exec_with_retry(_op)
+        return result[0]
 
     def list_files(self, namespace: str) -> List[Dict[str, Any]]:
         """List metadata for all stored files in *namespace*."""

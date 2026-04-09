@@ -112,7 +112,7 @@ _BUILTIN_KNOWLEDGE: dict = {
         "I am built on free open-source AI technology.",
     r"hello|hi|hey|greet": "Hello! I'm AURa, your AI OS. How can I assist you today?\n"
         "Type 'help' for a list of commands.",
-    r"version": "AURa v1.0.0 — ready for release.",
+    r"version": "AURa v1.1.0 — stable release.",
 }
 
 
@@ -378,6 +378,10 @@ class AIEngine:
         "Respond concisely unless asked for detailed explanations."
     )
 
+    # Maximum number of history entries retained in memory.
+    # Prevents unbounded growth on long-running mobile sessions.
+    MAX_HISTORY: int = 500
+
     def __init__(self, config: AIEngineConfig) -> None:
         self._config = config
         self._backend: BaseBackend = create_backend(config)
@@ -414,6 +418,7 @@ class AIEngine:
         response = self._backend.generate(prompt, system_prompt=sys_prompt)
         self._history.append({"role": "user", "content": prompt})
         self._history.append({"role": "assistant", "content": response.text})
+        self._trim_history()
         return response
 
     def stream(self, prompt: str, context: Optional[str] = None) -> Generator[str, None, None]:
@@ -454,4 +459,10 @@ class AIEngine:
     def load_history(self, history: List[dict]) -> None:
         """Replace the in-memory conversation history (used by persistence layer)."""
         self._history = list(history)
+        self._trim_history()
+
+    def _trim_history(self) -> None:
+        """Evict oldest entries when history exceeds MAX_HISTORY."""
+        if len(self._history) > self.MAX_HISTORY:
+            self._history = self._history[-self.MAX_HISTORY:]
 

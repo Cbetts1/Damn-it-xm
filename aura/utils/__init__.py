@@ -2,10 +2,11 @@
 
 import logging
 import os
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Callable, Dict, List
 
 
 def get_logger(name: str, level: str = "INFO") -> logging.Logger:
@@ -60,28 +61,36 @@ class EventBus:
     """
     Lightweight in-process publish/subscribe event bus.
     Used by the AI OS to coordinate messages between virtual components.
+
+    Thread-safe: a lock protects the subscriber list so that publish,
+    subscribe, and unsubscribe can be called from any thread.
     """
 
     def __init__(self) -> None:
-        self._subscribers: Dict[str, list] = {}
+        self._subscribers: Dict[str, List[Callable]] = {}
+        self._lock = threading.Lock()
         self._logger = get_logger("aura.eventbus")
 
-    def subscribe(self, event_type: str, callback) -> None:
-        self._subscribers.setdefault(event_type, []).append(callback)
+    def subscribe(self, event_type: str, callback: Callable) -> None:
+        with self._lock:
+            self._subscribers.setdefault(event_type, []).append(callback)
 
-    def unsubscribe(self, event_type: str, callback) -> None:
-        if event_type in self._subscribers:
-            self._subscribers[event_type] = [
-                cb for cb in self._subscribers[event_type] if cb != callback
-            ]
+    def unsubscribe(self, event_type: str, callback: Callable) -> None:
+        with self._lock:
+            if event_type in self._subscribers:
+                self._subscribers[event_type] = [
+                    cb for cb in self._subscribers[event_type] if cb != callback
+                ]
 
     def publish(self, event_type: str, payload: Any = None) -> None:
+        with self._lock:
+            handlers = list(self._subscribers.get(event_type, []))
         self._logger.debug("Event: %s payload=%s", event_type, payload)
-        for cb in self._subscribers.get(event_type, []):
+        for cb in handlers:
             try:
                 cb(event_type, payload)
             except Exception as exc:
-                self._logger.error("Event handler error: %s", exc)
+                self._logger.error("Event handler error (%s): %s", event_type, exc)
 
     def publish_all(self, event_type: str, payload: Any = None) -> None:
         self.publish(event_type, payload)

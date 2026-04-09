@@ -70,7 +70,7 @@ class CommandCenterConfig:
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     log_level: str = "INFO"
     data_dir: str = os.path.join(os.path.expanduser("~"), ".aura")
 
@@ -85,7 +85,9 @@ class AURaConfig:
         """Load configuration from environment variables."""
         config = cls()
         config.log_level = os.getenv("AURA_LOG_LEVEL", config.log_level)
-        config.data_dir = os.getenv("AURA_DATA_DIR", config.data_dir)
+        raw_data_dir = os.getenv("AURA_DATA_DIR", config.data_dir)
+        # Normalise and resolve to prevent path-traversal from env vars.
+        config.data_dir = os.path.normpath(os.path.expanduser(raw_data_dir))
         config.ai_engine.backend = os.getenv("AURA_AI_BACKEND", config.ai_engine.backend)
         config.ai_engine.model_name = os.getenv("AURA_MODEL_NAME", config.ai_engine.model_name)
         config.ai_engine.device = os.getenv("AURA_DEVICE", config.ai_engine.device)

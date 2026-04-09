@@ -46,7 +46,7 @@ class AIOS:
     The single physical AI component that bridges all virtual infrastructure.
     """
 
-    VERSION = "1.0.0"
+    VERSION = "1.1.0"
 
     def __init__(self, config: Optional[AURaConfig] = None) -> None:
         self._config = config or AURaConfig.from_env()
@@ -173,6 +173,9 @@ class AIOS:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 state = json.load(fh)
+            if not isinstance(state, dict):
+                self._logger.warning("State file %s is not a JSON object — skipping", path)
+                return
         except (OSError, json.JSONDecodeError) as exc:
             self._logger.warning("Could not load state from %s: %s", path, exc)
             return

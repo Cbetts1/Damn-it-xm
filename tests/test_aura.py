@@ -1575,3 +1575,1802 @@ def test_aios_help_includes_new_commands():
         assert "plugins" in help_text
         assert "kv" in help_text
 
+
+
+# ===========================================================================
+# New OS Architecture — Layer Tests
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# ROOT Policy Engine
+# ---------------------------------------------------------------------------
+
+def test_policy_engine_default_deny():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    verdict = engine.evaluate("user", "write", "/dev/vcpu")
+    assert verdict == PolicyVerdict.DENY
+
+
+def test_policy_engine_explicit_allow():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    engine.add_rule(PolicyRule(
+        name="allow-user-read",
+        subject="user",
+        action="read",
+        resource="/dev/vcpu",
+        verdict=PolicyVerdict.ALLOW,
+        priority=10,
+    ))
+    verdict = engine.evaluate("user", "read", "/dev/vcpu")
+    assert verdict == PolicyVerdict.ALLOW
+
+
+def test_policy_engine_require_raises_on_deny():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    try:
+        engine.require("hacker", "deploy", "artefact:evil")
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+
+
+def test_policy_engine_glob_matching():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    engine.add_rule(PolicyRule(
+        name="allow-dev-star",
+        subject="aura-init",
+        action="device.open",
+        resource="/dev/*",
+        verdict=PolicyVerdict.ALLOW,
+        priority=5,
+    ))
+    assert engine.evaluate("aura-init", "device.open", "/dev/vcpu") == PolicyVerdict.ALLOW
+    assert engine.evaluate("aura-init", "device.open", "/dev/vnet") == PolicyVerdict.ALLOW
+    assert engine.evaluate("aura-init", "write", "/dev/vcpu") == PolicyVerdict.DENY
+
+
+def test_policy_engine_os_defaults():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine.with_os_defaults()
+    # Root can do anything
+    assert engine.evaluate("root", "deploy", "artefact:xyz") == PolicyVerdict.ALLOW
+    # aura-init can open devices
+    assert engine.evaluate("aura-init", "device.open", "/dev/vcpu") == PolicyVerdict.ALLOW
+    # Unknown subject is denied
+    assert engine.evaluate("unknown", "deploy", "artefact:xyz") == PolicyVerdict.DENY
+
+
+def test_policy_engine_list_and_remove():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine()
+    engine.add_rule(PolicyRule(
+        name="tmp-rule",
+        subject="*",
+        action="*",
+        resource="*",
+        verdict=PolicyVerdict.ALLOW,
+        priority=99,
+    ))
+    rules = engine.list_rules()
+    assert any(r["name"] == "tmp-rule" for r in rules)
+    removed = engine.remove_rule("tmp-rule")
+    assert removed is True
+    rules_after = engine.list_rules()
+    assert not any(r["name"] == "tmp-rule" for r in rules_after)
+
+
+# ---------------------------------------------------------------------------
+# ROOT Approval Gate
+# ---------------------------------------------------------------------------
+
+def test_approval_gate_request_pending():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-001", "build-pipeline")
+    assert req.status == ApprovalStatus.PENDING
+    assert req.artefact_id == "art-001"
+    assert req.deploy_token is None
+
+
+def test_approval_gate_approve():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-002", "build-pipeline")
+    approved = gate.approve(req.request_id)
+    assert approved.status == ApprovalStatus.APPROVED
+    assert approved.deploy_token is not None
+
+
+def test_approval_gate_reject():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-003", "pipeline")
+    rejected = gate.reject(req.request_id, "security violation")
+    assert rejected.status == ApprovalStatus.REJECTED
+    assert rejected.reject_reason == "security violation"
+
+
+def test_approval_gate_auto_approve():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret", auto_approve=True)
+    req = gate.request("art-auto", "ci-pipeline")
+    assert req.status == ApprovalStatus.APPROVED
+    assert req.deploy_token is not None
+
+
+def test_approval_gate_verify_token():
+    from aura.root.approval import ApprovalGate
+    gate = ApprovalGate(signing_secret="test-secret", auto_approve=True)
+    req = gate.request("art-v", "ci")
+    assert req.deploy_token is not None
+    assert gate.verify_deploy_token("art-v", req.deploy_token) is True
+    assert gate.verify_deploy_token("art-v", "bad-token") is False
+
+
+def test_approval_gate_list_requests():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    gate.request("art-x1", "pipeline")
+    gate.request("art-x2", "pipeline")
+    reqs = gate.list_requests()
+    assert len(reqs) >= 2
+    pending = gate.list_requests(ApprovalStatus.PENDING)
+    assert all(r["status"] == "pending" for r in pending)
+
+
+# ---------------------------------------------------------------------------
+# ROOT Sovereign Layer
+# ---------------------------------------------------------------------------
+
+def test_root_layer_start_stop():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    assert root.running is True
+    s = root.status()
+    assert s["running"] is True
+    root.stop()
+    assert root.running is False
+
+
+def test_root_layer_gate_allow():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.root.policy import PolicyVerdict
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    verdict = root.gate("root", "deploy", "artefact:test")
+    assert verdict == PolicyVerdict.ALLOW
+    root.stop()
+
+
+def test_root_layer_gate_deny_raises():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    try:
+        root.gate("hacker", "deploy", "artefact:evil", raise_on_deny=True)
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+    finally:
+        root.stop()
+
+
+def test_root_layer_audit_log():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    root.gate("root", "read", "system:status")
+    log = root.audit_log(last_n=20)
+    assert len(log) > 0
+    assert any(e["subject"] == "root" for e in log)
+    root.stop()
+
+
+# ---------------------------------------------------------------------------
+# Virtual Hardware /dev/*
+# ---------------------------------------------------------------------------
+
+def test_dev_vcpu_submit_and_metrics():
+    from aura.config import CPUConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.hardware.vcpu import VCPUDevice
+    cpu = VirtualCPU(CPUConfig(virtual_cores=2, max_concurrent_tasks=2))
+    cpu.start()
+    dev = VCPUDevice(cpu)
+    assert dev.path == "/dev/vcpu"
+    m = dev.metrics()
+    assert m["device"] == "/dev/vcpu"
+    assert "virtual_cores" in m
+    # Submit a task
+    tid = dev.submit(lambda: 42, name="dev_test")
+    import time
+    for _ in range(30):
+        t = dev.get_task(tid)
+        if t and t["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    t = dev.get_task(tid)
+    assert t is not None
+    assert t["status"] == "completed"
+    cpu.stop()
+
+
+def test_dev_vram_allocate_free():
+    from aura.hardware.vram import VRAMDevice
+    dev = VRAMDevice(total_mb=1024.0)
+    assert dev.path == "/dev/vram"
+    alloc_id = dev.allocate("test-subsystem", 256.0, "test alloc")
+    m = dev.metrics()
+    assert m["used_mb"] == 256.0
+    assert m["allocation_count"] == 1
+    freed = dev.free(alloc_id)
+    assert freed is True
+    m2 = dev.metrics()
+    assert m2["used_mb"] == 0.0
+
+
+def test_dev_vram_overflow_raises():
+    from aura.hardware.vram import VRAMDevice
+    dev = VRAMDevice(total_mb=100.0)
+    try:
+        dev.allocate("greedy", 200.0)
+        assert False, "Expected MemoryError"
+    except MemoryError:
+        pass
+
+
+def test_dev_vdisk_create_list():
+    import tempfile, os
+    from aura.hardware.vdisk import VDiskDevice
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dev = VDiskDevice(tmpdir)
+        assert dev.path == "/dev/vdisk"
+        # System volumes are auto-created
+        vols = dev.list_volumes()
+        names = [v["name"] for v in vols]
+        assert "rootfs" in names
+        assert "home-vol" in names
+        assert "stage-vol" in names
+
+
+def test_dev_vdisk_mount_unmount():
+    import tempfile, os
+    from aura.hardware.vdisk import VDiskDevice
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dev = VDiskDevice(tmpdir)
+        new_vol = dev.create_volume("test-vol", 1.0)
+        mount_at = os.path.join(tmpdir, "mnt", "test")
+        ok = dev.mount_volume(new_vol["volume_id"], mount_at)
+        assert ok is True
+        vol = dev.get_volume(new_vol["volume_id"])
+        assert vol["status"] == "mounted"
+        unmounted = dev.unmount_volume(new_vol["volume_id"])
+        assert unmounted is True
+
+
+def test_dev_device_manager_register_list():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.hardware.device_manager import DeviceManager
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    dm = DeviceManager(root)
+    dummy_device = object()
+    dm.register("/dev/test", "test", dummy_device, "root")
+    devices = dm.list_devices()
+    assert any(d["path"] == "/dev/test" for d in devices)
+    root.stop()
+
+
+def test_dev_device_manager_open_gated():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.hardware.device_manager import DeviceManager
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    dm = DeviceManager(root)
+    dummy = object()
+    dm.register("/dev/test2", "test", dummy, "root")
+    # root can open
+    result = dm.open("/dev/test2", "root")
+    assert result is dummy
+    # unprivileged subject is denied
+    try:
+        dm.open("/dev/test2", "hacker")
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+    root.stop()
+
+
+# ---------------------------------------------------------------------------
+# Network Stack
+# ---------------------------------------------------------------------------
+
+def test_dhcp_request_lease():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.1.0/24", lease_time_s=3600)
+    lease = dhcp.request("aa:bb:cc:dd:ee:ff", "test-host")
+    assert lease.ip.startswith("10.0.1.")
+    assert lease.mac == "aa:bb:cc:dd:ee:ff"
+    assert not lease.expired
+    m = dhcp.metrics()
+    assert m["active_leases"] == 1
+
+
+def test_dhcp_renew_same_ip():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.2.0/24")
+    lease1 = dhcp.request("11:22:33:44:55:66", "host1")
+    lease2 = dhcp.request("11:22:33:44:55:66", "host1")
+    assert lease1.ip == lease2.ip  # same IP on renewal
+
+
+def test_dhcp_release():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.3.0/24")
+    lease = dhcp.request("aa:00:00:00:00:01", "h1")
+    released = dhcp.release("aa:00:00:00:00:01")
+    assert released is True
+    assert dhcp.metrics()["active_leases"] == 0
+
+
+def test_dns_resolve_local():
+    from aura.network.dns import DNSResolver
+    dns = DNSResolver()
+    ip = dns.resolve("aura.local")
+    assert ip == "10.0.0.1"
+
+
+def test_dns_override():
+    from aura.network.dns import DNSResolver
+    dns = DNSResolver()
+    dns.override("custom.aura.local", "192.168.99.1")
+    assert dns.resolve("custom.aura.local") == "192.168.99.1"
+
+
+def test_dns_add_record():
+    from aura.network.dns import DNSResolver, DNSRecord
+    dns = DNSResolver()
+    dns.add_record(DNSRecord("new.aura.local", "A", "10.0.0.50"))
+    assert dns.resolve("new.aura.local") == "10.0.0.50"
+
+
+def test_nat_snat_creates_entry():
+    from aura.network.nat import NATTable
+    nat = NATTable(gateway_ip="1.2.3.4")
+    ext_ip, ext_port = nat.snat("10.0.0.5", 45000, "8.8.8.8", 53, "udp")
+    assert ext_ip == "1.2.3.4"
+    assert ext_port >= 32768
+    m = nat.metrics()
+    assert m["entry_count"] == 1
+    assert m["total_packets"] == 1
+
+
+def test_nat_disabled_passthrough():
+    from aura.network.nat import NATTable
+    nat = NATTable()
+    nat.enabled = False
+    ext_ip, ext_port = nat.snat("10.0.0.5", 1234, "1.1.1.1", 80)
+    assert ext_ip == "10.0.0.5"
+    assert ext_port == 1234
+
+
+def test_firewall_default_deny():
+    from aura.network.firewall import Firewall, FirewallVerdict
+    fw = Firewall(default_verdict=FirewallVerdict.DENY)
+    allowed = fw.allow("10.0.0.5", "8.8.8.8", "tcp", 80)
+    assert allowed is False
+
+
+def test_firewall_allow_rule():
+    from aura.network.firewall import Firewall, FirewallRule, FirewallVerdict
+    fw = Firewall(default_verdict=FirewallVerdict.DENY)
+    fw.add_rule(FirewallRule(
+        name="allow-http-out",
+        src_ip="*",
+        dst_ip="*",
+        protocol="tcp",
+        dst_port=80,
+        verdict=FirewallVerdict.ALLOW,
+        priority=10,
+    ))
+    assert fw.allow("10.0.0.5", "8.8.8.8", "tcp", 80) is True
+    assert fw.allow("10.0.0.5", "8.8.8.8", "tcp", 443) is False
+
+
+def test_firewall_os_defaults():
+    from aura.network.firewall import Firewall
+    fw = Firewall.with_os_defaults()
+    # Loopback always allowed
+    assert fw.allow("127.0.0.1", "127.0.0.1", "tcp", 8000) is True
+    # API port 8000 allowed
+    assert fw.allow("10.0.0.5", "10.0.0.1", "tcp", 8000) is True
+    # DNS allowed
+    assert fw.allow("*", "10.0.0.2", "udp", 53) is True
+
+
+def test_network_stack_metrics():
+    from aura.config import NetworkConfig
+    from aura.network.stack import NetworkStack
+    cfg = NetworkConfig()
+    stack = NetworkStack(cfg)
+    m = stack.metrics()
+    assert "dhcp" in m
+    assert "dns" in m
+    assert "nat" in m
+    assert "firewall" in m
+    assert m["device"] == "/dev/vnet"
+
+
+def test_network_stack_dhcp_dns_integration():
+    from aura.config import NetworkConfig
+    from aura.network.stack import NetworkStack
+    cfg = NetworkConfig()
+    stack = NetworkStack(cfg)
+    lease = stack.dhcp_request("ca:fe:ba:be:00:01", "myhost")
+    assert lease.ip.startswith("10.0.0.")
+    ip = stack.dns_resolve("aura.local")
+    assert ip == "10.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# Boot chain
+# ---------------------------------------------------------------------------
+
+def test_bootloader_full_boot_halt():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.home.userland import HOMELayer
+    from aura.boot.aura_init import AURAInit
+    from aura.boot.bootloader import Bootloader, BootState
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = AURaConfig()
+        cfg.home.home_dir = str(__import__("pathlib").Path(tmpdir) / "home")
+        root = ROOTLayer(cfg)
+        home = HOMELayer(cfg.home)
+        init = AURAInit()
+        init.register("test-svc", start_fn=lambda: None, stop_fn=lambda: None)
+        bl = Bootloader(root, home, init)
+        bl.boot()
+        assert bl.state == BootState.READY
+        log = bl.boot_log
+        stage_names = [r["stage"] for r in log]
+        assert "firmware" in stage_names
+        assert "root" in stage_names
+        assert "home_mount" in stage_names
+        assert "aura_init" in stage_names
+        assert all(r["success"] for r in log)
+        bl.halt()
+        assert bl.state == BootState.HALTED
+
+
+def test_aura_init_register_start_stop():
+    from aura.boot.aura_init import AURAInit, ServiceState
+    init = AURAInit()
+    started = []
+    stopped = []
+    init.register("svc1",
+                  start_fn=lambda: started.append(1),
+                  stop_fn=lambda: stopped.append(1))
+    init.start_all()
+    assert len(started) == 1
+    svcs = init.list_services()
+    assert any(s["name"] == "svc1" for s in svcs)
+    assert any(s["state"] == "running" for s in svcs)
+    init.stop_all()
+    assert len(stopped) == 1
+
+
+# ---------------------------------------------------------------------------
+# HOME Userland
+# ---------------------------------------------------------------------------
+
+def test_home_layer_start_stop():
+    import tempfile
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(__import__("pathlib").Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        assert home.running is True
+        s = home.status()
+        assert s["packages"] > 0   # default packages installed
+        home.stop()
+        assert home.running is False
+
+
+def test_home_filesystem_paths():
+    import tempfile
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    import os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(__import__("pathlib").Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        fs = home.filesystem
+        assert fs.exists("etc", "os-release")
+        assert "bin" in fs.ls()
+        home.stop()
+
+
+def test_home_package_install_remove():
+    import tempfile
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(__import__("pathlib").Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        home.install_package("test-pkg", "1.0.0", "A test package")
+        pkgs = home.list_packages()
+        assert any(p["name"] == "test-pkg" for p in pkgs)
+        removed = home.remove_package("test-pkg")
+        assert removed is True
+        home.stop()
+
+
+def test_home_filesystem_path_traversal():
+    import tempfile
+    from aura.config import HOMEConfig
+    from aura.home.filesystem import HomeFilesystem
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fs = HomeFilesystem(tmpdir)
+        try:
+            fs.path("..", "..", "etc", "passwd")
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Build Pipeline
+# ---------------------------------------------------------------------------
+
+def test_build_pipeline_auto_approve():
+    import tempfile
+    from aura.config import BuildConfig
+    from aura.root.approval import ApprovalGate
+    from aura.build.pipeline import BuildPipeline, BuildStatus
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = BuildConfig(
+            artefact_dir=tmpdir,
+            require_root_approval=True,
+            signing_secret="test-secret",
+            auto_approve_ci=True,  # will be honoured by ApprovalGate
+        )
+        gate = ApprovalGate("test-secret", auto_approve=True)
+        pipeline = BuildPipeline(config=cfg, approval_gate=gate)
+        run = pipeline.run(
+            name="test-component",
+            version="1.0.0",
+            commit="abc123",
+        )
+        assert run.status == BuildStatus.DEPLOYED
+        assert run.artefact is not None
+        assert run.artefact.signature is not None
+        # Verify the artefact is on disk
+        import os
+        assert run.artefact.staged_path is not None
+        assert os.path.exists(run.artefact.staged_path)
+
+
+def test_build_pipeline_approval_required():
+    import tempfile
+    from aura.config import BuildConfig
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    from aura.build.pipeline import BuildPipeline, BuildStatus
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = BuildConfig(
+            artefact_dir=tmpdir,
+            require_root_approval=True,
+            signing_secret="test-secret",
+        )
+        gate = ApprovalGate("test-secret", auto_approve=False)
+        pipeline = BuildPipeline(config=cfg, approval_gate=gate)
+        # Run pipeline — approval will be pending, deploy step will not block
+        run = pipeline.run(
+            name="pending-component",
+            version="1.0.0",
+        )
+        # Approval is pending → deploy step skips gracefully
+        assert run.approval_request_id is not None
+        req = gate.get(run.approval_request_id)
+        assert req is not None
+        assert req.status == ApprovalStatus.PENDING
+
+
+def test_artefact_signer():
+    from aura.build.signer import ArtefactSigner
+    signer = ArtefactSigner("signing-secret")
+    sig = signer.sign("art-001", "abc123hash")
+    assert len(sig) == 64  # SHA-256 hex digest
+    assert signer.verify("art-001", "abc123hash", sig) is True
+    assert signer.verify("art-001", "wronghash", sig) is False
+
+
+# ---------------------------------------------------------------------------
+# Identity & Governance
+# ---------------------------------------------------------------------------
+
+def test_crypto_identity_issue_verify():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    engine = CryptoIdentityEngine("test-root-secret")
+    token = engine.issue(IdentityKind.USER, "alice", metadata={"role": "operator"})
+    assert token.subject == "alice"
+    assert token.fingerprint
+    assert token.signature
+    assert engine.verify(token) is True
+
+
+def test_crypto_identity_revoked():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    engine = CryptoIdentityEngine("test-root-secret")
+    token = engine.issue(IdentityKind.SERVICE, "my-service")
+    token.revoked = True
+    assert engine.verify(token) is False
+
+
+def test_identity_registry():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    from aura.identity.registry import IdentityRegistry
+    engine = CryptoIdentityEngine("test-root-secret")
+    registry = IdentityRegistry(engine)
+    token = registry.issue(IdentityKind.NODE, "node-001")
+    assert registry.verify(token.identity_id) is True
+    revoked = registry.revoke(token.identity_id)
+    assert revoked is True
+    assert registry.verify(token.identity_id) is False
+
+
+def test_identity_registry_find_by_subject():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    from aura.identity.registry import IdentityRegistry
+    engine = CryptoIdentityEngine("test-root-secret")
+    registry = IdentityRegistry(engine)
+    registry.issue(IdentityKind.USER, "bob")
+    registry.issue(IdentityKind.USER, "bob")
+    tokens = registry.find_by_subject("bob")
+    assert len(tokens) == 2
+
+
+def test_audit_log_write_query():
+    from aura.governance.audit import AuditLog, AuditCategory
+    log = AuditLog(max_entries=100)
+    log.write(AuditCategory.POLICY, "root", "policy.eval", "/dev/vcpu", "allow")
+    log.write(AuditCategory.BUILD, "builder", "build.run", "artefact:abc", "ok")
+    events = log.query(last_n=10)
+    assert len(events) >= 2
+    policy_events = log.query(category=AuditCategory.POLICY)
+    assert all(e["category"] == "policy" for e in policy_events)
+
+
+def test_audit_log_metrics():
+    from aura.governance.audit import AuditLog, AuditCategory
+    log = AuditLog(max_entries=100)
+    log.write(AuditCategory.SYSTEM, "system", "boot", "os", "ok")
+    log.write(AuditCategory.SYSTEM, "system", "halt", "os", "ok")
+    log.write(AuditCategory.POLICY, "hacker", "escalate", "root", "deny")
+    m = log.metrics()
+    assert m["total_events"] >= 3
+    assert "system" in m["by_category"]
+    assert "policy" in m["by_category"]
+    assert "deny" in m["by_outcome"]
+
+
+# ---------------------------------------------------------------------------
+# Compute Dispatcher / /dev/vgpu
+# ---------------------------------------------------------------------------
+
+def test_vgpu_submit_local():
+    import time
+    from aura.config import CPUConfig, CloudConfig, ComputeConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.cloud.virtual_cloud import VirtualCloud
+    from aura.hardware.vcpu import VCPUDevice
+    from aura.hardware.vgpu import VGPUDevice
+
+    cpu = VirtualCPU(CPUConfig(virtual_cores=2, max_concurrent_tasks=2))
+    cpu.start()
+    dev_cpu = VCPUDevice(cpu)
+    cloud = VirtualCloud(CloudConfig(compute_nodes=1))
+    dev_gpu = VGPUDevice(vcpu=dev_cpu, cloud=cloud, default_backend="local")
+
+    job_id = dev_gpu.submit(lambda: 42, name="vgpu-test", backend="local")
+    for _ in range(30):
+        job = dev_gpu.get_job(job_id)
+        if job and job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    job = dev_gpu.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "completed"
+    m = dev_gpu.metrics()
+    assert m["total_jobs"] >= 1
+    cpu.stop()
+
+
+def test_vgpu_spill_to_cloud():
+    """When local CPU is saturated, AUTO routing should prefer cloud."""
+    from aura.config import CPUConfig, CloudConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.cloud.virtual_cloud import VirtualCloud
+    from aura.hardware.vcpu import VCPUDevice
+    from aura.compute.dispatcher import ComputeDispatcher, ComputeBackend
+
+    cpu = VirtualCPU(CPUConfig(virtual_cores=1, max_concurrent_tasks=1))
+    cpu.start()
+    dev_cpu = VCPUDevice(cpu)
+    cloud = VirtualCloud(CloudConfig(compute_nodes=1))
+
+    # Spill threshold at 0 % so any load triggers cloud
+    dispatcher = ComputeDispatcher(
+        vcpu=dev_cpu,
+        cloud=cloud,
+        spill_threshold_pct=0.0,
+        default_backend=ComputeBackend.LOCAL,
+    )
+    resolved = dispatcher._resolve_backend(ComputeBackend.AUTO)
+    assert resolved == ComputeBackend.CLOUD
+    cpu.stop()
+
+
+# ---------------------------------------------------------------------------
+# Full AIOS integration — new OS commands
+# ---------------------------------------------------------------------------
+
+def test_aios_dispatch_root():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18470
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("root")
+        assert "ROOT Sovereign Layer" in out
+        assert "Running" in out
+
+
+def test_aios_dispatch_dev():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18471
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("dev")
+        assert "/dev/" in out
+        assert "vcpu" in out
+        assert "vnet" in out
+
+
+def test_aios_dispatch_net():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18472
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("net")
+        assert "DHCP" in out
+        assert "DNS" in out or "Firewall" in out
+
+
+def test_aios_dispatch_vgpu():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18473
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vgpu")
+        assert "vgpu" in out.lower() or "Compute" in out
+
+
+def test_aios_dispatch_vram():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18474
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vram")
+        assert "RAM" in out or "vram" in out.lower()
+
+
+def test_aios_dispatch_vdisk():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18475
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vdisk")
+        assert "rootfs" in out or "volume" in out.lower()
+
+
+def test_aios_dispatch_home():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18476
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("home")
+        assert "HOME" in out
+        assert "Packages" in out or "packages" in out.lower()
+
+
+def test_aios_dispatch_build_list():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18477
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("build", ["list"])
+        assert "no runs" in out.lower() or "Build runs" in out
+
+
+def test_aios_dispatch_identity():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18478
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("identity")
+        assert "Identity" in out or "tokens" in out.lower()
+
+
+def test_aios_dispatch_audit():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18479
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("audit")
+        assert "audit" in out.lower() or "events" in out.lower() or "[" in out
+
+
+def test_aios_metrics_includes_new_layers():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18480
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        m = aios.metrics()
+        assert "root" in m
+        assert "home" in m
+        assert "vnet" in m
+        assert "vgpu" in m
+        assert "vram" in m
+        assert "vdisk" in m
+        assert "identity" in m
+        assert "audit" in m
+
+
+def test_aios_properties_accessible():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18481
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        assert aios.root.running is True
+        assert aios.home.running is True
+        assert aios.dev_vcpu is not None
+        assert aios.dev_vram is not None
+        assert aios.dev_vdisk is not None
+        assert aios.dev_vnet is not None
+        assert aios.dev_vbt is not None
+        assert aios.dev_vgpu is not None
+        assert aios.build_pipeline is not None
+        assert aios.identity_registry is not None
+        assert aios.audit_log is not None
+
+# ===========================================================================
+# New OS Architecture — Layer Tests
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# ROOT Policy Engine
+# ---------------------------------------------------------------------------
+
+def test_policy_engine_default_deny():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    verdict = engine.evaluate("user", "write", "/dev/vcpu")
+    assert verdict == PolicyVerdict.DENY
+
+
+def test_policy_engine_explicit_allow():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    engine.add_rule(PolicyRule(
+        name="allow-user-read",
+        subject="user",
+        action="read",
+        resource="/dev/vcpu",
+        verdict=PolicyVerdict.ALLOW,
+        priority=10,
+    ))
+    verdict = engine.evaluate("user", "read", "/dev/vcpu")
+    assert verdict == PolicyVerdict.ALLOW
+
+
+def test_policy_engine_require_raises_on_deny():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    try:
+        engine.require("hacker", "deploy", "artefact:evil")
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+
+
+def test_policy_engine_glob_matching():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine(default_verdict=PolicyVerdict.DENY)
+    engine.add_rule(PolicyRule(
+        name="allow-dev-star",
+        subject="aura-init",
+        action="device.open",
+        resource="/dev/*",
+        verdict=PolicyVerdict.ALLOW,
+        priority=5,
+    ))
+    assert engine.evaluate("aura-init", "device.open", "/dev/vcpu") == PolicyVerdict.ALLOW
+    assert engine.evaluate("aura-init", "device.open", "/dev/vnet") == PolicyVerdict.ALLOW
+    assert engine.evaluate("aura-init", "write", "/dev/vcpu") == PolicyVerdict.DENY
+
+
+def test_policy_engine_os_defaults():
+    from aura.root.policy import PolicyEngine, PolicyVerdict
+    engine = PolicyEngine.with_os_defaults()
+    assert engine.evaluate("root", "deploy", "artefact:xyz") == PolicyVerdict.ALLOW
+    assert engine.evaluate("aura-init", "device.open", "/dev/vcpu") == PolicyVerdict.ALLOW
+    assert engine.evaluate("unknown", "deploy", "artefact:xyz") == PolicyVerdict.DENY
+
+
+def test_policy_engine_list_and_remove():
+    from aura.root.policy import PolicyEngine, PolicyRule, PolicyVerdict
+    engine = PolicyEngine()
+    engine.add_rule(PolicyRule(
+        name="tmp-rule",
+        subject="*",
+        action="*",
+        resource="*",
+        verdict=PolicyVerdict.ALLOW,
+        priority=99,
+    ))
+    rules = engine.list_rules()
+    assert any(r["name"] == "tmp-rule" for r in rules)
+    removed = engine.remove_rule("tmp-rule")
+    assert removed is True
+    rules_after = engine.list_rules()
+    assert not any(r["name"] == "tmp-rule" for r in rules_after)
+
+
+# ---------------------------------------------------------------------------
+# ROOT Approval Gate
+# ---------------------------------------------------------------------------
+
+def test_approval_gate_request_pending():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-001", "build-pipeline")
+    assert req.status == ApprovalStatus.PENDING
+    assert req.artefact_id == "art-001"
+    assert req.deploy_token is None
+
+
+def test_approval_gate_approve():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-002", "build-pipeline")
+    approved = gate.approve(req.request_id)
+    assert approved.status == ApprovalStatus.APPROVED
+    assert approved.deploy_token is not None
+
+
+def test_approval_gate_reject():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    req = gate.request("art-003", "pipeline")
+    rejected = gate.reject(req.request_id, "security violation")
+    assert rejected.status == ApprovalStatus.REJECTED
+    assert rejected.reject_reason == "security violation"
+
+
+def test_approval_gate_auto_approve():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret", auto_approve=True)
+    req = gate.request("art-auto", "ci-pipeline")
+    assert req.status == ApprovalStatus.APPROVED
+    assert req.deploy_token is not None
+
+
+def test_approval_gate_verify_token():
+    from aura.root.approval import ApprovalGate
+    gate = ApprovalGate(signing_secret="test-secret", auto_approve=True)
+    req = gate.request("art-v", "ci")
+    assert req.deploy_token is not None
+    assert gate.verify_deploy_token("art-v", req.deploy_token) is True
+    assert gate.verify_deploy_token("art-v", "bad-token") is False
+
+
+def test_approval_gate_list_requests():
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    gate = ApprovalGate(signing_secret="test-secret")
+    gate.request("art-x1", "pipeline")
+    gate.request("art-x2", "pipeline")
+    reqs = gate.list_requests()
+    assert len(reqs) >= 2
+    pending = gate.list_requests(ApprovalStatus.PENDING)
+    assert all(r["status"] == "pending" for r in pending)
+
+
+# ---------------------------------------------------------------------------
+# ROOT Sovereign Layer
+# ---------------------------------------------------------------------------
+
+def test_root_layer_start_stop():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    assert root.running is True
+    s = root.status()
+    assert s["running"] is True
+    root.stop()
+    assert root.running is False
+
+
+def test_root_layer_gate_allow():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.root.policy import PolicyVerdict
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    verdict = root.gate("root", "deploy", "artefact:test")
+    assert verdict == PolicyVerdict.ALLOW
+    root.stop()
+
+
+def test_root_layer_gate_deny_raises():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    try:
+        root.gate("hacker", "deploy", "artefact:evil", raise_on_deny=True)
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+    finally:
+        root.stop()
+
+
+def test_root_layer_audit_log():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    root.gate("root", "read", "system:status")
+    log = root.audit_log(last_n=20)
+    assert len(log) > 0
+    assert any(e["subject"] == "root" for e in log)
+    root.stop()
+
+
+# ---------------------------------------------------------------------------
+# Virtual Hardware /dev/*
+# ---------------------------------------------------------------------------
+
+def test_dev_vcpu_submit_and_metrics():
+    import time
+    from aura.config import CPUConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.hardware.vcpu import VCPUDevice
+    cpu = VirtualCPU(CPUConfig(virtual_cores=2, max_concurrent_tasks=2))
+    cpu.start()
+    dev = VCPUDevice(cpu)
+    assert dev.path == "/dev/vcpu"
+    m = dev.metrics()
+    assert m["device"] == "/dev/vcpu"
+    assert "virtual_cores" in m
+    tid = dev.submit(lambda: 42, name="dev_test")
+    for _ in range(30):
+        t = dev.get_task(tid)
+        if t and t["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    t = dev.get_task(tid)
+    assert t is not None
+    assert t["status"] == "completed"
+    cpu.stop()
+
+
+def test_dev_vram_allocate_free():
+    from aura.hardware.vram import VRAMDevice
+    dev = VRAMDevice(total_mb=1024.0)
+    assert dev.path == "/dev/vram"
+    alloc_id = dev.allocate("test-subsystem", 256.0, "test alloc")
+    m = dev.metrics()
+    assert m["used_mb"] == 256.0
+    assert m["allocation_count"] == 1
+    freed = dev.free(alloc_id)
+    assert freed is True
+    m2 = dev.metrics()
+    assert m2["used_mb"] == 0.0
+
+
+def test_dev_vram_overflow_raises():
+    from aura.hardware.vram import VRAMDevice
+    dev = VRAMDevice(total_mb=100.0)
+    try:
+        dev.allocate("greedy", 200.0)
+        assert False, "Expected MemoryError"
+    except MemoryError:
+        pass
+
+
+def test_dev_vdisk_create_list():
+    import tempfile
+    from aura.hardware.vdisk import VDiskDevice
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dev = VDiskDevice(tmpdir)
+        assert dev.path == "/dev/vdisk"
+        vols = dev.list_volumes()
+        names = [v["name"] for v in vols]
+        assert "rootfs" in names
+        assert "home-vol" in names
+        assert "stage-vol" in names
+
+
+def test_dev_vdisk_mount_unmount():
+    import tempfile, os
+    from aura.hardware.vdisk import VDiskDevice
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dev = VDiskDevice(tmpdir)
+        new_vol = dev.create_volume("test-vol", 1.0)
+        mount_at = os.path.join(tmpdir, "mnt", "test")
+        ok = dev.mount_volume(new_vol["volume_id"], mount_at)
+        assert ok is True
+        vol = dev.get_volume(new_vol["volume_id"])
+        assert vol["status"] == "mounted"
+        unmounted = dev.unmount_volume(new_vol["volume_id"])
+        assert unmounted is True
+
+
+def test_dev_device_manager_register_list():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.hardware.device_manager import DeviceManager
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    dm = DeviceManager(root)
+    dummy_device = object()
+    dm.register("/dev/test", "test", dummy_device, "root")
+    devices = dm.list_devices()
+    assert any(d["path"] == "/dev/test" for d in devices)
+    root.stop()
+
+
+def test_dev_device_manager_open_gated():
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.hardware.device_manager import DeviceManager
+    cfg = AURaConfig()
+    root = ROOTLayer(cfg)
+    root.start()
+    dm = DeviceManager(root)
+    dummy = object()
+    dm.register("/dev/test2", "test", dummy, "root")
+    result = dm.open("/dev/test2", "root")
+    assert result is dummy
+    try:
+        dm.open("/dev/test2", "hacker")
+        assert False, "Expected PermissionError"
+    except PermissionError:
+        pass
+    root.stop()
+
+
+# ---------------------------------------------------------------------------
+# Network Stack
+# ---------------------------------------------------------------------------
+
+def test_dhcp_request_lease():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.1.0/24", lease_time_s=3600)
+    lease = dhcp.request("aa:bb:cc:dd:ee:ff", "test-host")
+    assert lease.ip.startswith("10.0.1.")
+    assert lease.mac == "aa:bb:cc:dd:ee:ff"
+    assert not lease.expired
+    m = dhcp.metrics()
+    assert m["active_leases"] == 1
+
+
+def test_dhcp_renew_same_ip():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.2.0/24")
+    lease1 = dhcp.request("11:22:33:44:55:66", "host1")
+    lease2 = dhcp.request("11:22:33:44:55:66", "host1")
+    assert lease1.ip == lease2.ip
+
+
+def test_dhcp_release():
+    from aura.network.dhcp import DHCPServer
+    dhcp = DHCPServer(subnet="10.0.3.0/24")
+    dhcp.request("aa:00:00:00:00:01", "h1")
+    released = dhcp.release("aa:00:00:00:00:01")
+    assert released is True
+    assert dhcp.metrics()["active_leases"] == 0
+
+
+def test_dns_resolve_local():
+    from aura.network.dns import DNSResolver
+    dns = DNSResolver()
+    ip = dns.resolve("aura.local")
+    assert ip == "10.0.0.1"
+
+
+def test_dns_override():
+    from aura.network.dns import DNSResolver
+    dns = DNSResolver()
+    dns.override("custom.aura.local", "192.168.99.1")
+    assert dns.resolve("custom.aura.local") == "192.168.99.1"
+
+
+def test_nat_snat_creates_entry():
+    from aura.network.nat import NATTable
+    nat = NATTable(gateway_ip="1.2.3.4")
+    ext_ip, ext_port = nat.snat("10.0.0.5", 45000, "8.8.8.8", 53, "udp")
+    assert ext_ip == "1.2.3.4"
+    assert ext_port >= 32768
+    m = nat.metrics()
+    assert m["entry_count"] == 1
+
+
+def test_nat_disabled_passthrough():
+    from aura.network.nat import NATTable
+    nat = NATTable()
+    nat.enabled = False
+    ext_ip, ext_port = nat.snat("10.0.0.5", 1234, "1.1.1.1", 80)
+    assert ext_ip == "10.0.0.5"
+    assert ext_port == 1234
+
+
+def test_firewall_default_deny():
+    from aura.network.firewall import Firewall, FirewallVerdict
+    fw = Firewall(default_verdict=FirewallVerdict.DENY)
+    allowed = fw.allow("10.0.0.5", "8.8.8.8", "tcp", 80)
+    assert allowed is False
+
+
+def test_firewall_allow_rule():
+    from aura.network.firewall import Firewall, FirewallRule, FirewallVerdict
+    fw = Firewall(default_verdict=FirewallVerdict.DENY)
+    fw.add_rule(FirewallRule(
+        name="allow-http-out",
+        src_ip="*",
+        dst_ip="*",
+        protocol="tcp",
+        dst_port=80,
+        verdict=FirewallVerdict.ALLOW,
+        priority=10,
+    ))
+    assert fw.allow("10.0.0.5", "8.8.8.8", "tcp", 80) is True
+    assert fw.allow("10.0.0.5", "8.8.8.8", "tcp", 443) is False
+
+
+def test_firewall_os_defaults():
+    from aura.network.firewall import Firewall
+    fw = Firewall.with_os_defaults()
+    assert fw.allow("127.0.0.1", "127.0.0.1", "tcp", 8000) is True
+    assert fw.allow("10.0.0.5", "10.0.0.1", "tcp", 8000) is True
+    assert fw.allow("10.0.0.5", "10.0.0.2", "udp", 53) is True
+
+
+def test_network_stack_metrics():
+    from aura.config import NetworkConfig
+    from aura.network.stack import NetworkStack
+    cfg = NetworkConfig()
+    stack = NetworkStack(cfg)
+    m = stack.metrics()
+    assert "dhcp" in m
+    assert "dns" in m
+    assert "nat" in m
+    assert "firewall" in m
+    assert m["device"] == "/dev/vnet"
+
+
+def test_network_stack_dhcp_dns_integration():
+    from aura.config import NetworkConfig
+    from aura.network.stack import NetworkStack
+    cfg = NetworkConfig()
+    stack = NetworkStack(cfg)
+    lease = stack.dhcp_request("ca:fe:ba:be:00:01", "myhost")
+    assert lease.ip.startswith("10.0.0.")
+    ip = stack.dns_resolve("aura.local")
+    assert ip == "10.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# Boot chain
+# ---------------------------------------------------------------------------
+
+def test_bootloader_full_boot_halt():
+    import tempfile, pathlib
+    from aura.config import AURaConfig
+    from aura.root.sovereign import ROOTLayer
+    from aura.home.userland import HOMELayer
+    from aura.boot.aura_init import AURAInit
+    from aura.boot.bootloader import Bootloader, BootState
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = AURaConfig()
+        cfg.home.home_dir = str(pathlib.Path(tmpdir) / "home")
+        root = ROOTLayer(cfg)
+        home = HOMELayer(cfg.home)
+        init = AURAInit()
+        init.register("test-svc", start_fn=lambda: None, stop_fn=lambda: None)
+        bl = Bootloader(root, home, init)
+        bl.boot()
+        assert bl.state == BootState.READY
+        log = bl.boot_log
+        stage_names = [r["stage"] for r in log]
+        assert "firmware" in stage_names
+        assert "root" in stage_names
+        assert "home_mount" in stage_names
+        assert "aura_init" in stage_names
+        assert all(r["success"] for r in log)
+        bl.halt()
+        assert bl.state == BootState.HALTED
+
+
+def test_aura_init_register_start_stop():
+    from aura.boot.aura_init import AURAInit
+    init = AURAInit()
+    started = []
+    stopped = []
+    init.register("svc1",
+                  start_fn=lambda: started.append(1),
+                  stop_fn=lambda: stopped.append(1))
+    init.start_all()
+    assert len(started) == 1
+    svcs = init.list_services()
+    assert any(s["name"] == "svc1" for s in svcs)
+    assert any(s["state"] == "running" for s in svcs)
+    init.stop_all()
+    assert len(stopped) == 1
+
+
+# ---------------------------------------------------------------------------
+# HOME Userland
+# ---------------------------------------------------------------------------
+
+def test_home_layer_start_stop():
+    import tempfile, pathlib
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(pathlib.Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        assert home.running is True
+        s = home.status()
+        assert s["packages"] > 0
+        home.stop()
+        assert home.running is False
+
+
+def test_home_filesystem_paths():
+    import tempfile, pathlib
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(pathlib.Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        fs = home.filesystem
+        assert fs.exists("etc", "os-release")
+        assert "bin" in fs.ls()
+        home.stop()
+
+
+def test_home_package_install_remove():
+    import tempfile, pathlib
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = HOMEConfig(home_dir=str(pathlib.Path(tmpdir) / "home"))
+        home = HOMELayer(cfg)
+        home.start()
+        home.install_package("test-pkg", "1.0.0", "A test package")
+        pkgs = home.list_packages()
+        assert any(p["name"] == "test-pkg" for p in pkgs)
+        removed = home.remove_package("test-pkg")
+        assert removed is True
+        home.stop()
+
+
+def test_home_filesystem_path_traversal():
+    import tempfile
+    from aura.home.filesystem import HomeFilesystem
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fs = HomeFilesystem(tmpdir)
+        try:
+            fs.path("..", "..", "etc", "passwd")
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Build Pipeline
+# ---------------------------------------------------------------------------
+
+def test_build_pipeline_auto_approve():
+    import tempfile, os
+    from aura.config import BuildConfig
+    from aura.root.approval import ApprovalGate
+    from aura.build.pipeline import BuildPipeline, BuildStatus
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = BuildConfig(artefact_dir=tmpdir, require_root_approval=True, signing_secret="test-secret")
+        gate = ApprovalGate("test-secret", auto_approve=True)
+        pipeline = BuildPipeline(config=cfg, approval_gate=gate)
+        run = pipeline.run(name="test-component", version="1.0.0", commit="abc123")
+        assert run.status == BuildStatus.DEPLOYED
+        assert run.artefact is not None
+        assert run.artefact.signature is not None
+        assert run.artefact.staged_path is not None
+        assert os.path.exists(run.artefact.staged_path)
+
+
+def test_build_pipeline_approval_required():
+    import tempfile
+    from aura.config import BuildConfig
+    from aura.root.approval import ApprovalGate, ApprovalStatus
+    from aura.build.pipeline import BuildPipeline
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = BuildConfig(artefact_dir=tmpdir, require_root_approval=True, signing_secret="test-secret")
+        gate = ApprovalGate("test-secret", auto_approve=False)
+        pipeline = BuildPipeline(config=cfg, approval_gate=gate)
+        run = pipeline.run(name="pending-component", version="1.0.0")
+        assert run.approval_request_id is not None
+        req = gate.get(run.approval_request_id)
+        assert req is not None
+        assert req.status == ApprovalStatus.PENDING
+
+
+def test_artefact_signer():
+    from aura.build.signer import ArtefactSigner
+    signer = ArtefactSigner("signing-secret")
+    sig = signer.sign("art-001", "abc123hash")
+    assert len(sig) == 64
+    assert signer.verify("art-001", "abc123hash", sig) is True
+    assert signer.verify("art-001", "wronghash", sig) is False
+
+
+# ---------------------------------------------------------------------------
+# Identity & Governance
+# ---------------------------------------------------------------------------
+
+def test_crypto_identity_issue_verify():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    engine = CryptoIdentityEngine("test-root-secret")
+    token = engine.issue(IdentityKind.USER, "alice", metadata={"role": "operator"})
+    assert token.subject == "alice"
+    assert token.fingerprint
+    assert token.signature
+    assert engine.verify(token) is True
+
+
+def test_crypto_identity_revoked():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    engine = CryptoIdentityEngine("test-root-secret")
+    token = engine.issue(IdentityKind.SERVICE, "my-service")
+    token.revoked = True
+    assert engine.verify(token) is False
+
+
+def test_identity_registry():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    from aura.identity.registry import IdentityRegistry
+    engine = CryptoIdentityEngine("test-root-secret")
+    registry = IdentityRegistry(engine)
+    token = registry.issue(IdentityKind.NODE, "node-001")
+    assert registry.verify(token.identity_id) is True
+    revoked = registry.revoke(token.identity_id)
+    assert revoked is True
+    assert registry.verify(token.identity_id) is False
+
+
+def test_identity_registry_find_by_subject():
+    from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+    from aura.identity.registry import IdentityRegistry
+    engine = CryptoIdentityEngine("test-root-secret")
+    registry = IdentityRegistry(engine)
+    registry.issue(IdentityKind.USER, "bob")
+    registry.issue(IdentityKind.USER, "bob")
+    tokens = registry.find_by_subject("bob")
+    assert len(tokens) == 2
+
+
+def test_audit_log_write_query():
+    from aura.governance.audit import AuditLog, AuditCategory
+    log = AuditLog(max_entries=100)
+    log.write(AuditCategory.POLICY, "root", "policy.eval", "/dev/vcpu", "allow")
+    log.write(AuditCategory.BUILD, "builder", "build.run", "artefact:abc", "ok")
+    events = log.query(last_n=10)
+    assert len(events) >= 2
+    policy_events = log.query(category=AuditCategory.POLICY)
+    assert all(e["category"] == "policy" for e in policy_events)
+
+
+def test_audit_log_metrics():
+    from aura.governance.audit import AuditLog, AuditCategory
+    log = AuditLog(max_entries=100)
+    log.write(AuditCategory.SYSTEM, "system", "boot", "os", "ok")
+    log.write(AuditCategory.SYSTEM, "system", "halt", "os", "ok")
+    log.write(AuditCategory.POLICY, "hacker", "escalate", "root", "deny")
+    m = log.metrics()
+    assert m["total_events"] >= 3
+    assert "system" in m["by_category"]
+    assert "deny" in m["by_outcome"]
+
+
+# ---------------------------------------------------------------------------
+# Compute Dispatcher / /dev/vgpu
+# ---------------------------------------------------------------------------
+
+def test_vgpu_submit_local():
+    import time
+    from aura.config import CPUConfig, CloudConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.cloud.virtual_cloud import VirtualCloud
+    from aura.hardware.vcpu import VCPUDevice
+    from aura.hardware.vgpu import VGPUDevice
+    cpu = VirtualCPU(CPUConfig(virtual_cores=2, max_concurrent_tasks=2))
+    cpu.start()
+    dev_cpu = VCPUDevice(cpu)
+    cloud = VirtualCloud(CloudConfig(compute_nodes=1))
+    dev_gpu = VGPUDevice(vcpu=dev_cpu, cloud=cloud, default_backend="local")
+    job_id = dev_gpu.submit(lambda: 42, name="vgpu-test", backend="local")
+    for _ in range(30):
+        job = dev_gpu.get_job(job_id)
+        if job and job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.1)
+    job = dev_gpu.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "completed"
+    m = dev_gpu.metrics()
+    assert m["total_jobs"] >= 1
+    cpu.stop()
+
+
+def test_vgpu_spill_to_cloud():
+    from aura.config import CPUConfig, CloudConfig
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.cloud.virtual_cloud import VirtualCloud
+    from aura.hardware.vcpu import VCPUDevice
+    from aura.compute.dispatcher import ComputeDispatcher, ComputeBackend
+    cpu = VirtualCPU(CPUConfig(virtual_cores=1, max_concurrent_tasks=1))
+    cpu.start()
+    dev_cpu = VCPUDevice(cpu)
+    cloud = VirtualCloud(CloudConfig(compute_nodes=1))
+    dispatcher = ComputeDispatcher(
+        vcpu=dev_cpu, cloud=cloud,
+        spill_threshold_pct=0.0,
+        default_backend=ComputeBackend.LOCAL,
+    )
+    resolved = dispatcher._resolve_backend(ComputeBackend.AUTO)
+    assert resolved == ComputeBackend.CLOUD
+    cpu.stop()
+
+
+# ---------------------------------------------------------------------------
+# Full AIOS integration — new OS commands
+# ---------------------------------------------------------------------------
+
+def test_aios_dispatch_root():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18470
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("root")
+        assert "ROOT Sovereign Layer" in out
+        assert "Running" in out
+
+
+def test_aios_dispatch_dev():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18471
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("dev")
+        assert "/dev/" in out
+        assert "vcpu" in out
+
+
+def test_aios_dispatch_net():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18472
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("net")
+        assert "DHCP" in out or "Network" in out
+
+
+def test_aios_dispatch_vgpu():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18473
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vgpu")
+        assert "vgpu" in out.lower() or "Compute" in out
+
+
+def test_aios_dispatch_vram():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18474
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vram")
+        assert "RAM" in out or "vram" in out.lower()
+
+
+def test_aios_dispatch_vdisk():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18475
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("vdisk")
+        assert "rootfs" in out or "volume" in out.lower()
+
+
+def test_aios_dispatch_home():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18476
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("home")
+        assert "HOME" in out
+
+
+def test_aios_dispatch_build_list():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18477
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("build", ["list"])
+        assert "no runs" in out.lower() or "Build" in out
+
+
+def test_aios_dispatch_identity():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18478
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("identity")
+        assert "Identity" in out or "tokens" in out.lower()
+
+
+def test_aios_dispatch_audit():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18479
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("audit")
+        assert "audit" in out.lower() or "Audit" in out or "[" in out
+
+
+def test_aios_metrics_includes_new_layers():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18480
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        m = aios.metrics()
+        assert "root" in m
+        assert "home" in m
+        assert "vnet" in m
+        assert "vgpu" in m
+        assert "vram" in m
+        assert "vdisk" in m
+        assert "identity" in m
+        assert "audit" in m
+
+
+def test_aios_properties_accessible():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = 18481
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        assert aios.root.running is True
+        assert aios.home.running is True
+        assert aios.dev_vcpu is not None
+        assert aios.dev_vram is not None
+        assert aios.dev_vdisk is not None
+        assert aios.dev_vnet is not None
+        assert aios.dev_vbt is not None
+        assert aios.dev_vgpu is not None
+        assert aios.build_pipeline is not None
+        assert aios.identity_registry is not None
+        assert aios.audit_log is not None

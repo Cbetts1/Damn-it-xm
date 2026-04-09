@@ -1,3 +1,5 @@
+# Copyright (c) 2024-2026 AURa Project (Cbetts1/Damn-it-xm). All rights reserved.
+# SPDX-License-Identifier: MIT
 """AURa setup — pip installable package."""
 
 from setuptools import setup, find_packages
@@ -7,7 +9,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name="aura-ai-os",
-    version="1.1.0",
+    version="1.2.0",
     author="AURa Project",
     description="Autonomous Universal Resource Architecture — AI Virtual System",
     long_description=long_description,

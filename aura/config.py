@@ -1,3 +1,5 @@
+# Copyright (c) 2024-2026 AURa Project (Cbetts1/Damn-it-xm). All rights reserved.
+# SPDX-License-Identifier: MIT
 """
 AURa Configuration
 Central configuration for all virtual components and AI engine settings.
@@ -70,7 +72,7 @@ class CommandCenterConfig:
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
-    version: str = "1.1.0"
+    version: str = "1.2.0"
     log_level: str = "INFO"
     data_dir: str = os.path.join(os.path.expanduser("~"), ".aura")
 

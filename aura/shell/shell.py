@@ -1,3 +1,5 @@
+# Copyright (c) 2024-2026 AURa Project (Cbetts1/Damn-it-xm). All rights reserved.
+# SPDX-License-Identifier: MIT
 """
 AURa Shell
 ==========
@@ -49,7 +51,7 @@ _BOX_DRAWING_CHARS: str = "─│╔╗╚╝║═◈"  # chars that indicate a
 _BANNER = f"""\
 {_BOLD}{_CYAN}
   ╔══════════════════════════════════════════════════════╗
-  ║   AURa v1.1.0  —  Autonomous Universal Resource     ║
+  ║   AURa v1.2.0  —  Autonomous Universal Resource     ║
   ║                     Architecture                    ║
   ║   AI OS · Virtual Cloud · Virtual CPU · VServer     ║
   ╚══════════════════════════════════════════════════════╝

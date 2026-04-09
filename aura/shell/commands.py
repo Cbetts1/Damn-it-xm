@@ -250,7 +250,7 @@ class ShellCommandExecutor:
         dst = os.path.normpath(dst if os.path.isabs(dst) else os.path.join(self._cwd, dst))
         try:
             if os.path.isdir(src):
-                shutil.copytree(src, dst)
+                shutil.copytree(src, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(src, dst)
         except Exception as exc:
@@ -337,7 +337,9 @@ class ShellCommandExecutor:
             return os.environ.get("USER", os.environ.get("USERNAME", "unknown"))
 
     def _cmd_date(self, args: List[str]) -> str:
-        return datetime.datetime.now().strftime("%a %b %d %H:%M:%S %Z %Y")
+        now = datetime.datetime.now()
+        tz = now.strftime("%z") or ""
+        return now.strftime(f"%a %b %d %H:%M:%S {tz} %Y").strip()
 
     def _cmd_uptime(self, args: List[str]) -> str:
         elapsed = time.monotonic() - self._start_time
@@ -354,11 +356,11 @@ class ShellCommandExecutor:
             free  = usage.free
             if human:
                 def _h(n):
-                    for unit in ("B", "K", "M", "G", "T"):
+                    for unit in ("B", "K", "M", "G", "T", "P"):
                         if n < 1024:
                             return f"{n:.0f}{unit}"
                         n /= 1024
-                    return f"{n:.0f}P"
+                    return f"{n:.0f}E"
                 return (
                     f"Filesystem      Size  Used Avail Use%\n"
                     f"{self._cwd:<15} {_h(total):>5} {_h(used):>5} {_h(free):>5} "

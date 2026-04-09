@@ -17,6 +17,7 @@ storage, and serving is done through its managed virtual layer.
 
 from __future__ import annotations
 
+import os
 import signal
 import time
 import threading
@@ -168,8 +169,7 @@ class AIOS:
         # 6. Persistence engine + Plugin manager
         self._logger.info("[6/6] Initialising Persistence Engine…")
         try:
-            import os as _os
-            _os.makedirs(_os.path.dirname(self._config.persistence_db) or ".", exist_ok=True)
+            os.makedirs(os.path.dirname(self._config.persistence_db) or ".", exist_ok=True)
             self._persistence = PersistenceEngine(self._config.persistence_db)
         except Exception as exc:
             self._logger.warning("PersistenceEngine init failed: %s", exc)

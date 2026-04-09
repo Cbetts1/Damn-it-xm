@@ -89,7 +89,7 @@ class AURaShell:
     """
 
     @property
-    def PROMPT(self) -> str:  # type: ignore[override]
+    def prompt(self) -> str:
         cwd = getattr(self._executor, "cwd", "~")
         short = cwd.replace(os.path.expanduser("~"), "~")
         return f"{_BOLD}{_CYAN}AURa{_RESET}{_DIM}:{short}>{_RESET} "
@@ -188,7 +188,7 @@ class AURaShell:
 
         while True:
             try:
-                line = input(self.PROMPT)
+                line = input(self.prompt)
             except EOFError:
                 print()
                 break

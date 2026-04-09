@@ -152,16 +152,28 @@ class PersistenceEngine:
 
         *path* is treated as a relative path within ``cloud_storage/``.
         Returns the absolute path where the file was written.
+
+        Raises ``ValueError`` if the resolved path would escape the storage root.
         """
         try:
-            # Normalise to relative to avoid directory traversal
-            clean_path = os.path.normpath(path).lstrip(os.sep)
-            full_path = os.path.join(self._storage_dir, clean_path)
+            # Resolve to an absolute path and verify it stays within storage_dir
+            if os.path.isabs(path):
+                # Strip leading separator so it becomes relative
+                path = os.path.relpath(path, "/")
+            clean_path = os.path.normpath(path)
+            if clean_path.startswith(".."):
+                raise ValueError(f"Path '{path}' attempts to escape the storage root.")
+            full_path = os.path.realpath(os.path.join(self._storage_dir, clean_path))
+            storage_root = os.path.realpath(self._storage_dir)
+            if not full_path.startswith(storage_root + os.sep) and full_path != storage_root:
+                raise ValueError(f"Path '{path}' resolves outside the storage root.")
             ensure_dir(os.path.dirname(full_path))
             with open(full_path, "wb") as fh:
                 fh.write(data)
             _logger.debug("save_file: %s (%d bytes)", full_path, len(data))
             return full_path
+        except ValueError:
+            raise
         except Exception as exc:
             _logger.error("save_file error: %s", exc)
             raise

@@ -233,7 +233,7 @@ class VirtualCPU:
                 with self._lock:
                     task.duration_ms = elapsed_ms
                     task.finished_at = utcnow()
-                    task.fn = lambda: None  # release reference to original callable
+                    task.fn = None  # release reference to original callable
                     self._active_task_count -= 1
                     self._finished_order.append(task.task_id)
                     self._evict_old_tasks()

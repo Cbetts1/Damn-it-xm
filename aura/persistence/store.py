@@ -110,7 +110,8 @@ class PersistenceEngine:
 
     def _exec_with_retry(self, fn):
         """Execute *fn(conn)* under the lock, retrying on ``OperationalError``
-        (e.g. "database is locked") with exponential back-off."""
+        (e.g. "database is locked") with exponential back-off.
+        Returns whatever *fn* returns."""
         delay = self._RETRY_BASE_DELAY
         for attempt in range(1, self._MAX_RETRIES + 1):
             try:
@@ -167,17 +168,15 @@ class PersistenceEngine:
         """Delete the entry at (*namespace*, *key*). Returns True if deleted."""
         _validate_name(namespace, "namespace")
         _validate_name(key, "key")
-        result = [False]
 
         def _op(conn):
             cur = conn.execute(
                 "DELETE FROM kv_store WHERE namespace=? AND key=?",
                 (namespace, key),
             )
-            result[0] = cur.rowcount > 0
+            return cur.rowcount > 0
 
-        self._exec_with_retry(_op)
-        return result[0]
+        return self._exec_with_retry(_op)
 
     def list_keys(self, namespace: str) -> List[str]:
         """Return all keys in *namespace*."""
@@ -252,17 +251,15 @@ class PersistenceEngine:
         """Delete a stored file. Returns True if the file existed."""
         _validate_name(namespace, "namespace")
         _validate_name(filename, "filename")
-        result = [False]
 
         def _op(conn):
             cur = conn.execute(
                 "DELETE FROM file_store WHERE namespace=? AND filename=?",
                 (namespace, filename),
             )
-            result[0] = cur.rowcount > 0
+            return cur.rowcount > 0
 
-        self._exec_with_retry(_op)
-        return result[0]
+        return self._exec_with_retry(_op)
 
     def list_files(self, namespace: str) -> List[Dict[str, Any]]:
         """List metadata for all stored files in *namespace*."""

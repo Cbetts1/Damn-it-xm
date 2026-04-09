@@ -139,7 +139,7 @@ class ComputeConfig:
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
-    version: str = "1.2.0"
+    version: str = "1.3.0"
     log_level: str = "INFO"
     data_dir: str = os.path.join(os.path.expanduser("~"), ".aura")
 

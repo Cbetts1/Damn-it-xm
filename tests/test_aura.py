@@ -29,7 +29,7 @@ def _wait_for_server(host: str, port: int, timeout: float = 5.0) -> None:
 def test_default_config_loads():
     from aura.config import AURaConfig
     cfg = AURaConfig()
-    assert cfg.version == "1.2.0"
+    assert cfg.version == "1.3.0"
     assert cfg.cloud.compute_nodes == 8
     assert cfg.cpu.virtual_cores == 64
     assert cfg.server.port == 8000
@@ -320,7 +320,7 @@ def test_virtual_server_api_metrics():
         _wait_for_server("127.0.0.1", 18433)
         with urllib.request.urlopen("http://127.0.0.1:18433/api/v1/metrics", timeout=5) as r:
             data = json.loads(r.read())
-        assert data["version"] == "1.2.0"
+        assert data["version"] == "1.3.0"
         assert "cloud" in data
         assert "cpu" in data
 
@@ -417,7 +417,7 @@ def test_aios_dispatch_version():
     cfg.cpu.virtual_cores = 2
     with AIOS(cfg) as aios:
         out = aios.dispatch("version")
-        assert "1.2.0" in out
+        assert "1.3.0" in out
 
 
 def test_aios_metrics_structure():
@@ -432,7 +432,7 @@ def test_aios_metrics_structure():
         assert "cloud" in m
         assert "cpu" in m
         assert "server" in m
-        assert m["version"] == "1.2.0"
+        assert m["version"] == "1.3.0"
 
 
 # ---------------------------------------------------------------------------

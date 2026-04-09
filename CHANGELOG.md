@@ -5,6 +5,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.0] — 2026-04-09
+
+### Added
+- **Build Pipeline** (`aura/build/pipeline.py`): full build → sign → approve →
+  deploy lifecycle with `BuildPipeline`, `BuildStatus`, `BuildRun`, and
+  `BuildArtefact`.
+- **Artefact Signer** (`aura/build/signer.py`): HMAC-SHA256 signing and
+  verification via `ArtefactSigner`.
+- **`aura.build` package** (`aura/build/__init__.py`) wired into `AIOS.start()`
+  (step 8/8) and exposed via `aios.build_pipeline`.
+
+### Changed
+- Version bumped from **1.2.0 → 1.3.0** across all version-bearing files.
+- All 163 tests pass (23 s).
+
+---
+
 ## [1.2.0] — 2026-04-09
 
 ### Added

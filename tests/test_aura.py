@@ -1645,7 +1645,8 @@ def test_shell_pipe_single_segment():
 
 
 def test_shell_uptime_dispatch():
-    """'uptime' command should return an uptime string after boot."""
+    """'uptime' command should return a formatted uptime string after boot."""
+    import re
     from aura.config import AURaConfig
     from aura.os_core.ai_os import AIOS
 
@@ -1656,7 +1657,10 @@ def test_shell_uptime_dispatch():
     with AIOS(cfg) as aios:
         out = aios.dispatch("uptime")
         assert "Uptime" in out
-        assert "h" in out and "m" in out and "s" in out
+        # Matches the format_uptime pattern: 00h 00m 00s
+        assert re.search(r"\d{2}h\s+\d{2}m\s+\d{2}s", out), (
+            f"Uptime string does not match expected format: {out!r}"
+        )
 
 
 def test_shell_help_includes_uptime():

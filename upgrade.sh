@@ -111,10 +111,13 @@ fi
 # --- Step 3: Install/upgrade test dependencies ------------------------------
 log "Ensuring test dependencies are available…"
 if [ "$DRY_RUN" = false ]; then
-  if "$PYTHON_BIN" -m pip install --quiet --upgrade pytest pytest-cov 2>/dev/null; then
+  PIP_OUT=$("$PYTHON_BIN" -m pip install --quiet --upgrade pytest pytest-cov 2>&1)
+  PIP_EXIT=$?
+  if [ "$PIP_EXIT" -eq 0 ]; then
     ok "pytest installed/updated"
   else
     warn "pip install failed — will attempt to run tests with existing pytest"
+    echo "$PIP_OUT" | tail -5
   fi
 else
   warn "Dry-run mode: skipping pip install"
@@ -141,7 +144,7 @@ else
 fi
 
 # --- Step 5: Run the test suite ---------------------------------------------
-log "Running full test suite (108 tests expected)…"
+log "Running full test suite…"
 if [ "$DRY_RUN" = false ]; then
   if "$PYTHON_BIN" -m pytest tests/test_aura.py -v --tb=short 2>&1; then
     ok "All tests passed — system validated ✅"

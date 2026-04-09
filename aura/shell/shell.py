@@ -204,8 +204,9 @@ class AURaShell:
         """
         Execute one pipeline segment (a single command string).
 
-        If *pipe_input* is provided it is appended to the command so that the
-        previous stage's output is available as context to the dispatcher.
+        If *pipe_input* is provided it is appended as a positional argument so
+        that the previous stage's output is available as context to the
+        dispatcher (e.g. for ``ask`` or ``analyse`` commands).
         """
         segment = segment.strip()
         if not segment:
@@ -215,15 +216,16 @@ class AURaShell:
         cmd = parts[0].lower()
         raw_args = parts[1].split() if len(parts) > 1 else []
 
-        # Inject pipe_input as trailing context when present
-        if pipe_input:
-            raw_args = raw_args + ["--pipe-input", pipe_input]
-
         _flags, positional = parse_flags(raw_args)
 
         # Shell-layer built-ins that bypass the dispatcher
         if cmd == "history":
             return self._show_history()
+
+        # Append pipe context as a trailing positional so commands like
+        # ``ask`` and ``analyse`` can use the previous stage's output.
+        if pipe_input:
+            positional = positional + [pipe_input]
 
         return self._aios.dispatch(cmd, positional) or ""
 
@@ -268,7 +270,7 @@ class AURaShell:
                 # Pipeline: feed output of each stage into the next
                 output = ""
                 for seg in segments:
-                    output = self._execute_segment(seg, pipe_input=output if output else None)
+                    output = self._execute_segment(seg, pipe_input=output or None)
 
             if output:
                 self._print(output)

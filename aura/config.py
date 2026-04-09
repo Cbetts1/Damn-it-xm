@@ -7,7 +7,7 @@ Central configuration for all virtual components and AI engine settings.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -69,6 +69,73 @@ class CommandCenterConfig:
 
 
 @dataclass
+class ROOTConfig:
+    """ROOT sovereign layer configuration."""
+    # All-deny firewall by default; explicit permits required
+    default_policy: str = "deny"
+    # Secret used to sign ROOT approval tokens (override via AURA_ROOT_SECRET)
+    root_secret: str = "aura-root-secret-change-me"
+    # Maximum pending approval requests before auto-reject
+    max_pending_approvals: int = 64
+    # Audit log retention (entries in memory)
+    audit_log_max_entries: int = 10000
+
+
+@dataclass
+class HOMEConfig:
+    """HOME userland configuration."""
+    # Base directory for HOME userland filesystem
+    home_dir: str = os.path.join(os.path.expanduser("~"), ".aura", "home")
+    # Whether HOME may directly call /dev/* without ROOT gate
+    direct_device_access: bool = False
+    # Maximum number of concurrent HOME processes
+    max_processes: int = 64
+
+
+@dataclass
+class NetworkConfig:
+    """Virtual network stack (/dev/vnet) configuration."""
+    # DHCP lease pool
+    dhcp_subnet: str = "10.0.0.0/24"
+    dhcp_lease_time_s: int = 3600
+    # DNS settings
+    dns_upstream: str = "8.8.8.8"
+    dns_search_domain: str = "aura.local"
+    # NAT masquerade enable
+    nat_enabled: bool = True
+    # Default firewall policy (deny / allow)
+    firewall_default: str = "deny"
+    # Pre-allowed port/protocol pairs: list of "tcp:22", "udp:53", etc.
+    firewall_allow_rules: List[str] = field(default_factory=lambda: [
+        "tcp:22", "tcp:80", "tcp:443", "tcp:8000", "udp:53",
+    ])
+
+
+@dataclass
+class BuildConfig:
+    """Build pipeline configuration."""
+    # Directory where build artefacts are staged
+    artefact_dir: str = os.path.join(os.path.expanduser("~"), ".aura", "artefacts")
+    # Whether ROOT approval is required before deploy
+    require_root_approval: bool = True
+    # HMAC secret for artefact signing
+    signing_secret: str = "aura-build-signing-secret-change-me"
+    # Auto-approve builds in CI (bypass manual ROOT gate)
+    auto_approve_ci: bool = False
+
+
+@dataclass
+class ComputeConfig:
+    """Compute abstraction (/dev/vgpu) configuration."""
+    # Default backend: "local" or "cloud"
+    default_backend: str = "local"
+    # Threshold at which local tasks spill over to cloud (0–100 %)
+    local_cpu_spill_threshold_pct: float = 80.0
+    # Cloud region to target when spilling
+    cloud_region: str = "virtual-us-east-1"
+
+
+@dataclass
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
@@ -81,6 +148,13 @@ class AURaConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     ai_engine: AIEngineConfig = field(default_factory=AIEngineConfig)
     command_center: CommandCenterConfig = field(default_factory=CommandCenterConfig)
+
+    # New OS architecture layers
+    root: ROOTConfig = field(default_factory=ROOTConfig)
+    home: HOMEConfig = field(default_factory=HOMEConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
+    build: BuildConfig = field(default_factory=BuildConfig)
+    compute: ComputeConfig = field(default_factory=ComputeConfig)
 
     @classmethod
     def from_env(cls) -> "AURaConfig":
@@ -98,6 +172,9 @@ class AURaConfig:
         config.command_center.port = int(os.getenv("AURA_DASHBOARD_PORT", str(config.command_center.port)))
         config.server.port = int(os.getenv("AURA_SERVER_PORT", str(config.server.port)))
         config.server.api_token = os.getenv("AURA_API_TOKEN", config.server.api_token)
+        config.root.root_secret = os.getenv("AURA_ROOT_SECRET", config.root.root_secret)
+        config.build.signing_secret = os.getenv("AURA_BUILD_SECRET", config.build.signing_secret)
+        config.compute.default_backend = os.getenv("AURA_COMPUTE_BACKEND", config.compute.default_backend)
         return config
 
 

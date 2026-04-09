@@ -36,6 +36,25 @@ from aura.adapters.android_bridge import detect_capabilities, AndroidBridge
 from aura.persistence.store import PersistenceEngine
 from aura.plugins.manager import PluginManager, SystemInfoPlugin, StoragePlugin
 
+# New OS architecture layers
+from aura.root.sovereign import ROOTLayer
+from aura.hardware.device_manager import DeviceManager
+from aura.hardware.vcpu import VCPUDevice
+from aura.hardware.vram import VRAMDevice
+from aura.hardware.vdisk import VDiskDevice
+from aura.hardware.vnet import VNetDevice
+from aura.hardware.vbt import VBTDevice
+from aura.hardware.vgpu import VGPUDevice
+from aura.network.stack import NetworkStack
+from aura.compute.dispatcher import ComputeBackend
+from aura.boot.bootloader import Bootloader, BootState
+from aura.boot.aura_init import AURAInit
+from aura.home.userland import HOMELayer
+from aura.build.pipeline import BuildPipeline
+from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
+from aura.identity.registry import IdentityRegistry
+from aura.governance.audit import AuditLog
+
 _logger = get_logger("aura.os")
 
 # ---------------------------------------------------------------------------
@@ -72,6 +91,32 @@ class AIOS:
 
         # Plugin manager
         self._plugin_manager: Optional[PluginManager] = None
+
+        # ----------------------------------------------------------------
+        # New OS architecture layers
+        # ----------------------------------------------------------------
+        # ROOT sovereign layer
+        self._root: Optional[ROOTLayer] = None
+        # /dev/ device manager
+        self._device_manager: Optional[DeviceManager] = None
+        # Virtual hardware devices
+        self._dev_vcpu: Optional[VCPUDevice] = None
+        self._dev_vram: Optional[VRAMDevice] = None
+        self._dev_vdisk: Optional[VDiskDevice] = None
+        self._dev_vnet: Optional[VNetDevice] = None
+        self._dev_vbt: Optional[VBTDevice] = None
+        self._dev_vgpu: Optional[VGPUDevice] = None
+        # HOME userland
+        self._home: Optional[HOMELayer] = None
+        # Boot chain
+        self._aura_init: Optional[AURAInit] = None
+        self._bootloader: Optional[Bootloader] = None
+        # Build pipeline
+        self._build_pipeline: Optional[BuildPipeline] = None
+        # Identity & governance
+        self._crypto_engine: Optional[CryptoIdentityEngine] = None
+        self._identity_registry: Optional[IdentityRegistry] = None
+        self._audit_log: Optional[AuditLog] = None
 
         # OS-level command registry — built-ins are handled in dispatch(),
         # custom commands registered via register_command() live here.
@@ -118,6 +163,74 @@ class AIOS:
     def plugin_manager(self) -> PluginManager:
         assert self._plugin_manager is not None, "AIOS not started"
         return self._plugin_manager
+
+    # ------------------------------------------------------------------
+    # New OS architecture — properties
+    # ------------------------------------------------------------------
+
+    @property
+    def root(self) -> ROOTLayer:
+        assert self._root is not None, "AIOS not started"
+        return self._root
+
+    @property
+    def device_manager(self) -> DeviceManager:
+        assert self._device_manager is not None, "AIOS not started"
+        return self._device_manager
+
+    @property
+    def dev_vcpu(self) -> VCPUDevice:
+        assert self._dev_vcpu is not None, "AIOS not started"
+        return self._dev_vcpu
+
+    @property
+    def dev_vram(self) -> VRAMDevice:
+        assert self._dev_vram is not None, "AIOS not started"
+        return self._dev_vram
+
+    @property
+    def dev_vdisk(self) -> VDiskDevice:
+        assert self._dev_vdisk is not None, "AIOS not started"
+        return self._dev_vdisk
+
+    @property
+    def dev_vnet(self) -> VNetDevice:
+        assert self._dev_vnet is not None, "AIOS not started"
+        return self._dev_vnet
+
+    @property
+    def dev_vbt(self) -> VBTDevice:
+        assert self._dev_vbt is not None, "AIOS not started"
+        return self._dev_vbt
+
+    @property
+    def dev_vgpu(self) -> VGPUDevice:
+        assert self._dev_vgpu is not None, "AIOS not started"
+        return self._dev_vgpu
+
+    @property
+    def home(self) -> HOMELayer:
+        assert self._home is not None, "AIOS not started"
+        return self._home
+
+    @property
+    def build_pipeline(self) -> BuildPipeline:
+        assert self._build_pipeline is not None, "AIOS not started"
+        return self._build_pipeline
+
+    @property
+    def identity_registry(self) -> IdentityRegistry:
+        assert self._identity_registry is not None, "AIOS not started"
+        return self._identity_registry
+
+    @property
+    def audit_log(self) -> AuditLog:
+        assert self._audit_log is not None, "AIOS not started"
+        return self._audit_log
+
+    @property
+    def bootloader(self) -> Optional[Bootloader]:
+        return self._bootloader
 
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
@@ -214,7 +327,7 @@ class AIOS:
         self._logger.info("=" * 60)
 
         # 0a. Platform detection
-        self._logger.info("[0a/6] Detecting platform capabilities…")
+        self._logger.info("[0a/8] Detecting platform capabilities…")
         self._capabilities = detect_capabilities()
         self._bridge = AndroidBridge(capabilities=self._capabilities)
         self._logger.info(
@@ -225,32 +338,121 @@ class AIOS:
         )
 
         # 0b. Persistence + Plugin init
-        self._logger.info("[0b/6] Initialising persistence engine…")
+        self._logger.info("[0b/8] Initialising persistence engine…")
         db_path = os.path.join(self._config.data_dir, "aura.db")
         self._persistence = PersistenceEngine(db_path)
 
-        self._logger.info("[0c/6] Loading plugin manager…")
+        self._logger.info("[0c/8] Loading plugin manager…")
         self._plugin_manager = PluginManager(aios=self)
         self._plugin_manager.register(SystemInfoPlugin())
         self._plugin_manager.register(StoragePlugin())
 
-        # 1. AI Engine (the brain — the only "physical" AI component)
-        self._logger.info("[1/6] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
+        # ----------------------------------------------------------------
+        # NEW: Identity, governance, ROOT, /dev/*, HOME, build
+        # ----------------------------------------------------------------
+
+        # 0d. Governance audit log (subscribes to EventBus before ROOT starts)
+        self._logger.info("[0d/8] Initialising audit log…")
+        self._audit_log = AuditLog(
+            max_entries=self._config.root.audit_log_max_entries,
+            data_dir=self._config.data_dir,
+        )
+
+        # 0e. Cryptographic identity
+        self._logger.info("[0e/8] Initialising cryptographic identity…")
+        self._crypto_engine = CryptoIdentityEngine(self._config.root.root_secret)
+        self._identity_registry = IdentityRegistry(self._crypto_engine)
+        # Issue ROOT identity token
+        self._identity_registry.issue(
+            IdentityKind.NODE,
+            subject="root",
+            metadata={"role": "sovereign", "version": self.VERSION},
+        )
+
+        # 1. ROOT sovereign layer
+        self._logger.info("[1/8] Bringing ROOT sovereign layer online…")
+        self._root = ROOTLayer(self._config)
+        self._root.start()
+
+        # 2. AI Engine (the brain — the only "physical" AI component)
+        self._logger.info("[2/8] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
         self._ai_engine = AIEngine(self._config.ai_engine)
 
-        # 2. Virtual Cloud (large model storage + distributed compute)
-        self._logger.info("[2/6] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
+        # 3. Virtual Cloud (large model storage + distributed compute)
+        self._logger.info("[3/8] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
         self._cloud = VirtualCloud(self._config.cloud)
 
-        # 3. Virtual CPU (task scheduler)
-        self._logger.info("[3/6] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
+        # 4. Virtual CPU (task scheduler)
+        self._logger.info("[4/8] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
         self._cpu = VirtualCPU(self._config.cpu)
         self._cpu.start()
 
-        # 4. Virtual Server (HTTP API + dashboard)
-        self._logger.info("[4/6] Starting Virtual Server (port %d)…", self._config.server.port)
+        # 5. Virtual Server (HTTP API + dashboard)
+        self._logger.info("[5/8] Starting Virtual Server (port %d)…", self._config.server.port)
         self._server = VirtualServer(self._config.server)
         self._server.start(self)
+
+        # 6. Virtual hardware /dev/* devices
+        self._logger.info("[6/8] Claiming /dev/* virtual hardware devices…")
+        self._dev_vcpu = VCPUDevice(self._cpu)
+        self._dev_vram = VRAMDevice(total_mb=32_768.0)
+        vdisk_dir = os.path.join(self._config.data_dir, "vdisk")
+        self._dev_vdisk = VDiskDevice(vdisk_dir)
+        net_stack = NetworkStack(self._config.network)
+        self._dev_vnet = net_stack  # VNetDevice is the NetworkStack
+        self._dev_vbt = VBTDevice()
+        self._dev_vgpu = VGPUDevice(
+            vcpu=self._dev_vcpu,
+            cloud=self._cloud,
+            spill_threshold_pct=self._config.compute.local_cpu_spill_threshold_pct,
+            default_backend=self._config.compute.default_backend,
+        )
+
+        # Register all devices with the device manager
+        self._device_manager = DeviceManager(root=self._root)
+        self._root.bind_device_manager(self._device_manager)
+        self._device_manager.register("/dev/vcpu",  "vcpu",  self._dev_vcpu,  "root")
+        self._device_manager.register("/dev/vram",  "vram",  self._dev_vram,  "root")
+        self._device_manager.register("/dev/vdisk", "vdisk", self._dev_vdisk, "root")
+        self._device_manager.register("/dev/vnet",  "vnet",  self._dev_vnet,  "root")
+        self._device_manager.register("/dev/vbt",   "vbt",   self._dev_vbt,   "root")
+        self._device_manager.register("/dev/vgpu",  "vgpu",  self._dev_vgpu,  "root")
+
+        # 7. HOME userland
+        self._logger.info("[7/8] Mounting HOME userland…")
+        self._home = HOMELayer(self._config.home)
+        self._home.start()
+        self._root.mount_home(self._home)
+
+        # 8. Build pipeline
+        self._logger.info("[8/8] Initialising build pipeline…")
+        self._build_pipeline = BuildPipeline(
+            config=self._config.build,
+            approval_gate=self._root.approval_gate,
+        )
+
+        # ----------------------------------------------------------------
+        # aura-init — service manager (PID-1 equivalent)
+        # ----------------------------------------------------------------
+        self._aura_init = AURAInit()
+        # Register core services with aura-init
+        self._aura_init.register(
+            "virtual-cpu",
+            start_fn=lambda: None,   # already started above
+            stop_fn=lambda: self._cpu.stop() if self._cpu else None,
+            restart_on_failure=False,
+        )
+        self._aura_init.register(
+            "virtual-server",
+            start_fn=lambda: None,   # already started above
+            stop_fn=lambda: self._server.stop() if self._server else None,
+            restart_on_failure=False,
+        )
+        self._aura_init.register(
+            "build-pipeline",
+            start_fn=lambda: None,   # stateless, always ready
+            restart_on_failure=False,
+        )
 
         # Register the AI model in the cloud registry
         self._cloud.register_model(
@@ -270,6 +472,9 @@ class AIOS:
         self._logger.info("  AURa AI OS is ONLINE")
         self._logger.info("  Dashboard : http://localhost:%d/dashboard", self._config.server.port)
         self._logger.info("  API       : http://localhost:%d/api/v1/", self._config.server.port)
+        self._logger.info("  ROOT      : online (policy=deny-by-default)")
+        self._logger.info("  HOME      : mounted (%s)", self._config.home.home_dir)
+        self._logger.info("  /dev/*    : 6 devices registered")
         self._logger.info("=" * 60)
 
         EVENT_BUS.publish("aios.started", {"version": self.VERSION})
@@ -281,10 +486,18 @@ class AIOS:
         self._logger.info("AURa AI OS shutting down…")
         # Persist state before tearing down subsystems
         self._save_state()
+        # Flush audit log
+        if self._audit_log:
+            self._audit_log.flush_to_disk()
         if self._server:
             self._server.stop()
         if self._cpu:
             self._cpu.stop()
+        # Unmount HOME and stop ROOT
+        if self._root:
+            if self._root.home_mounted:
+                self._root.unmount_home()
+            self._root.stop()
         if self._persistence:
             self._persistence.close()
         self._running = False
@@ -318,6 +531,10 @@ class AIOS:
                 "virtual_cloud": "online" if self._cloud else "offline",
                 "virtual_cpu": "running" if (self._cpu and self._cpu._running) else "stopped",
                 "virtual_server": "running" if (self._server and self._server._thread and self._server._thread.is_alive()) else "stopped",
+                "root": "online" if (self._root and self._root.running) else "offline",
+                "home": "mounted" if (self._home and self._home.running) else "offline",
+                "dev_vnet": "online" if self._dev_vnet else "offline",
+                "dev_vgpu": "online" if self._dev_vgpu else "offline",
             },
         }
 
@@ -332,6 +549,14 @@ class AIOS:
             "cloud": self._cloud.metrics() if self._cloud else {},
             "cpu": self._cpu.metrics() if self._cpu else {},
             "server": self._server.metrics() if self._server else {},
+            "root": self._root.status() if self._root else {},
+            "home": self._home.status() if self._home else {},
+            "vram": self._dev_vram.metrics() if self._dev_vram else {},
+            "vdisk": self._dev_vdisk.metrics() if self._dev_vdisk else {},
+            "vnet": self._dev_vnet.metrics() if self._dev_vnet else {},
+            "vgpu": self._dev_vgpu.metrics() if self._dev_vgpu else {},
+            "identity": self._identity_registry.metrics() if self._identity_registry else {},
+            "audit": self._audit_log.metrics() if self._audit_log else {},
             "timestamp": utcnow(),
         }
 
@@ -568,6 +793,16 @@ class AIOS:
                 "  plugins       — list registered plugins\n"
                 "  bash <cmd>    — run a shell command (!<cmd> also works)\n"
                 "  kv …          — key-value persistence store\n"
+                "  root          — ROOT sovereign layer status\n"
+                "  dev           — list /dev/* virtual hardware devices\n"
+                "  net           — network stack status (DHCP/DNS/NAT/FW)\n"
+                "  vgpu          — compute dispatcher (/dev/vgpu) status\n"
+                "  vram          — virtual RAM device status\n"
+                "  vdisk         — virtual disk device status\n"
+                "  home          — HOME userland status\n"
+                "  build …       — build pipeline (run/list/approve/reject)\n"
+                "  identity      — identity registry status\n"
+                "  audit         — recent audit log entries\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
@@ -577,6 +812,203 @@ class AIOS:
                 )
                 return base + "\n\nCustom commands:\n" + custom
             return base
+
+        elif cmd == "root":
+            if self._root is None:
+                return "root: ROOT layer not initialised"
+            s = self._root.status()
+            lines = [
+                "── ROOT Sovereign Layer ────────────────────────────",
+                f"  Running        : {s['running']}",
+                f"  HOME mounted   : {s['home_mounted']}",
+                f"  Uptime         : {format_uptime(s['uptime_seconds'])}",
+                f"  Policy rules   : {s['policy_rules']}",
+                f"  Audit entries  : {s['audit_entries']}",
+                f"  Pending approvals : {s['pending_approvals']}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "dev":
+            if self._device_manager is None:
+                return "dev: device manager not initialised"
+            devices = self._device_manager.list_devices()
+            lines = [f"── /dev/ Virtual Hardware ({len(devices)} devices) ──────"]
+            for d in devices:
+                lines.append(
+                    f"  {d['path']:<14} kind={d['kind']:<6} claimed_by={d['claimed_by']}"
+                )
+            return "\n".join(lines)
+
+        elif cmd == "net":
+            if self._dev_vnet is None:
+                return "net: /dev/vnet not initialised"
+            m = self._dev_vnet.metrics()
+            dhcp = m["dhcp"]
+            dns = m["dns"]
+            nat = m["nat"]
+            fw = m["firewall"]
+            lines = [
+                "── /dev/vnet Network Stack ─────────────────────────",
+                f"  DHCP subnet    : {dhcp['subnet']}",
+                f"  DHCP leases    : {dhcp['active_leases']}/{dhcp['pool_size']}",
+                f"  DNS records    : {dns['record_count']} ({dns['zone_count']} zones)",
+                f"  NAT            : {'enabled' if nat['enabled'] else 'disabled'}  entries={nat['entry_count']}",
+                f"  Firewall rules : {fw['rule_count']}  default={fw['default_verdict']}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "vgpu":
+            if self._dev_vgpu is None:
+                return "vgpu: /dev/vgpu not initialised"
+            m = self._dev_vgpu.metrics()
+            lines = [
+                "── /dev/vgpu Compute Dispatcher ────────────────────",
+                f"  Active backend : {m['active_backend']}",
+                f"  Local CPU      : {m['local_cpu_pct']:.1f}%",
+                f"  Spill threshold: {m['spill_threshold_pct']:.0f}%",
+                f"  Total jobs     : {m['total_jobs']}",
+            ]
+            for status, count in m.get("by_status", {}).items():
+                lines.append(f"  {status:<12}   : {count}")
+            return "\n".join(lines)
+
+        elif cmd == "vram":
+            if self._dev_vram is None:
+                return "vram: /dev/vram not initialised"
+            m = self._dev_vram.metrics()
+            lines = [
+                "── /dev/vram Virtual RAM ───────────────────────────",
+                f"  Total          : {m['total_mb']:.0f} MB",
+                f"  Used           : {m['used_mb']:.1f} MB",
+                f"  Free           : {m['free_mb']:.1f} MB",
+                f"  Utilisation    : {m['utilisation_pct']:.1f}%",
+                f"  Allocations    : {m['allocation_count']}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "vdisk":
+            if self._dev_vdisk is None:
+                return "vdisk: /dev/vdisk not initialised"
+            m = self._dev_vdisk.metrics()
+            vols = self._dev_vdisk.list_volumes()
+            lines = [
+                "── /dev/vdisk Virtual Disk ─────────────────────────",
+                f"  Volumes        : {m['volume_count']}",
+                f"  Total GB       : {m['total_gb']:.1f}",
+                f"  Used           : {m['used_gb']:.3f} GB",
+            ]
+            for v in vols:
+                mounted = f"→ {v['mount_point']}" if v['mount_point'] else "(not mounted)"
+                lines.append(
+                    f"  [{v['status']:<10}] {v['name']:<12} {v['size_gb']:.0f}GB {mounted}"
+                )
+            return "\n".join(lines)
+
+        elif cmd == "home":
+            if self._home is None:
+                return "home: HOME layer not initialised"
+            s = self._home.status()
+            lines = [
+                "── HOME Userland ───────────────────────────────────",
+                f"  Running        : {s['running']}",
+                f"  Home dir       : {s['home_dir']}",
+                f"  Packages       : {s['packages']}",
+                f"  Processes      : {s['processes']}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "build":
+            if self._build_pipeline is None:
+                return "build: pipeline not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "run":
+                name = args[1] if len(args) > 1 else "aura"
+                version = args[2] if len(args) > 2 else "1.0.0"
+                commit = args[3] if len(args) > 3 else "HEAD"
+                run = self._build_pipeline.run(
+                    name=name, version=version, commit=commit,
+                )
+                return (
+                    f"Build run {run.run_id}: {run.status.value}\n"
+                    + "\n".join(
+                        f"  [{s['status']}] {s['stage']}  {s['duration_ms']:.0f}ms"
+                        for s in run.stages
+                    )
+                )
+            elif sub in ("list", "runs"):
+                runs = self._build_pipeline.list_runs()
+                if not runs:
+                    return "build: no runs yet"
+                lines = [f"Build runs ({len(runs)}):"]
+                for r in runs[-10:]:
+                    lines.append(
+                        f"  {r['run_id']}  [{r['status']:<12}]  {r['name']} v{r['version']}"
+                    )
+                return "\n".join(lines)
+            elif sub == "approve" and len(args) >= 2:
+                request_id = args[1]
+                try:
+                    req = self._root.approval_gate.approve(request_id)
+                    return f"build: approved {request_id} → artefact ready for deploy"
+                except (KeyError, ValueError) as exc:
+                    return f"build: {exc}"
+            elif sub == "reject" and len(args) >= 2:
+                request_id = args[1]
+                reason = " ".join(args[2:]) if len(args) > 2 else "Rejected by operator"
+                try:
+                    req = self._root.approval_gate.reject(request_id, reason)
+                    return f"build: rejected {request_id}"
+                except (KeyError, ValueError) as exc:
+                    return f"build: {exc}"
+            elif sub == "approvals":
+                from aura.root.approval import ApprovalStatus
+                reqs = self._root.approval_gate.list_requests()
+                if not reqs:
+                    return "build: no approval requests"
+                lines = [f"Approval requests ({len(reqs)}):"]
+                for r in reqs:
+                    lines.append(
+                        f"  {r['request_id']}  [{r['status']:<10}]  "
+                        f"artefact={r['artefact_id']}  by={r['submitter']}"
+                    )
+                return "\n".join(lines)
+            else:
+                return (
+                    "Usage:\n"
+                    "  build run [name] [version] [commit]\n"
+                    "  build list\n"
+                    "  build approvals\n"
+                    "  build approve <request_id>\n"
+                    "  build reject <request_id> [reason]"
+                )
+
+        elif cmd == "identity":
+            if self._identity_registry is None:
+                return "identity: not initialised"
+            m = self._identity_registry.metrics()
+            lines = [
+                "── Identity Registry ───────────────────────────────",
+                f"  Total tokens   : {m['total_tokens']}",
+                f"  Active         : {m['active']}",
+                f"  Revoked        : {m['revoked']}",
+                f"  Expired        : {m['expired']}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "audit":
+            if self._audit_log is None:
+                return "audit: not initialised"
+            n = int(args[0]) if args and args[0].isdigit() else 20
+            events = self._audit_log.query(last_n=n)
+            if not events:
+                return "audit: no events recorded"
+            lines = [f"Audit log (last {n}):"]
+            for e in events:
+                lines.append(
+                    f"  [{e['ts']}] {e['actor']:<12} {e['action']:<20} "
+                    f"{e['resource']:<25} {e['outcome']}"
+                )
+            return "\n".join(lines)
 
         elif cmd in self._commands:
             # Custom registered command

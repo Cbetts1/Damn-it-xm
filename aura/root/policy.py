@@ -196,7 +196,7 @@ class PolicyEngine:
         """
         engine = cls(default_verdict=PolicyVerdict.DENY)
 
-        # ROOT is all-powerful
+        # ROOT has unrestricted access to all resources
         engine.add_rule(PolicyRule(
             name="root-superuser",
             subject="root",

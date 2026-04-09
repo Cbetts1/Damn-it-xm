@@ -824,7 +824,7 @@ class AIOS:
                 f"  Uptime         : {format_uptime(s['uptime_seconds'])}",
                 f"  Policy rules   : {s['policy_rules']}",
                 f"  Audit entries  : {s['audit_entries']}",
-                f"  Pending apprvl : {s['pending_approvals']}",
+                f"  Pending approvals : {s['pending_approvals']}",
             ]
             return "\n".join(lines)
 

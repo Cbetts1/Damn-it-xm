@@ -109,6 +109,10 @@ class NetworkStack:
 
     def nat_snat(self, src_ip: str, src_port: int, dst_ip: str, dst_port: int,
                  protocol: str = "tcp"):
+        """Apply SNAT to an outbound packet via /dev/vnet.  Returns (external_ip, external_port).
+
+        See :meth:`aura.network.nat.NATTable.snat` for full documentation.
+        """
         return self.nat.snat(src_ip, src_port, dst_ip, dst_port, protocol)
 
     # ------------------------------------------------------------------

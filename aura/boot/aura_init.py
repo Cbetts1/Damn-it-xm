@@ -195,7 +195,10 @@ class AURAInit:
             _logger.error("aura-init: service %r failed to start: %s", name, exc)
             EVENT_BUS.publish("service.failed", {"name": name, "error": str(exc)})
 
-            # Restart logic
+            # Restart logic — runs inline in the calling thread.
+            # If many services fail simultaneously this will serialise their
+            # restart delays.  For production use, move restart scheduling to
+            # a background ThreadPoolExecutor.
             if svc.restart_on_failure and svc.restart_count < svc.max_restarts:
                 svc.restart_count += 1
                 _logger.info(

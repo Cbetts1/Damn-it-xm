@@ -49,6 +49,12 @@ class DiskVolume:
 
     @property
     def used_bytes(self) -> int:
+        """Return approximate used bytes by walking the volume directory tree.
+
+        Note: This performs a full directory walk and may be expensive for
+        large volumes.  Call sparingly; prefer :meth:`VDiskDevice.metrics`
+        for aggregate reporting.
+        """
         if not self.mount_point or not os.path.isdir(self.mount_point):
             return 0
         total = 0

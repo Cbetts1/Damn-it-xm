@@ -1074,3 +1074,504 @@ def test_aios_register_command():
         help_text = aios.dispatch("help")
         assert "ping" in help_text
 
+
+# ---------------------------------------------------------------------------
+# PersistenceEngine
+# ---------------------------------------------------------------------------
+
+def test_persistence_kv_set_get(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    engine.set("cfg", "color", "blue")
+    assert engine.get("cfg", "color") == "blue"
+    engine.close()
+
+
+def test_persistence_kv_default(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    assert engine.get("cfg", "nonexistent", default="fallback") == "fallback"
+    engine.close()
+
+
+def test_persistence_kv_delete(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    engine.set("cfg", "key1", 42)
+    deleted = engine.delete("cfg", "key1")
+    assert deleted is True
+    assert engine.get("cfg", "key1") is None
+    assert engine.delete("cfg", "key1") is False
+    engine.close()
+
+
+def test_persistence_kv_list_keys(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    engine.set("ns1", "a", 1)
+    engine.set("ns1", "b", 2)
+    engine.set("ns2", "c", 3)
+    keys = engine.list_keys("ns1")
+    assert sorted(keys) == ["a", "b"]
+    engine.close()
+
+
+def test_persistence_namespaces(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    engine.set("alpha", "x", 1)
+    engine.set("beta", "y", 2)
+    nss = engine.namespaces()
+    assert "alpha" in nss
+    assert "beta" in nss
+    engine.close()
+
+
+def test_persistence_invalid_name(tmp_path):
+    import pytest
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    with pytest.raises(ValueError):
+        engine.set("bad ns!", "key", "val")
+    with pytest.raises(ValueError):
+        engine.set("ns", "bad/key", "val")
+    engine.close()
+
+
+def test_persistence_file_store(tmp_path):
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    data = b"\x00\x01\x02Hello"
+    engine.store_file("blobs", "icon.png", data)
+    loaded = engine.load_file("blobs", "icon.png")
+    assert loaded == data
+    files = engine.list_files("blobs")
+    assert len(files) == 1
+    assert files[0]["filename"] == "icon.png"
+    assert files[0]["size"] == len(data)
+    deleted = engine.delete_file("blobs", "icon.png")
+    assert deleted is True
+    assert engine.load_file("blobs", "icon.png") is None
+    engine.close()
+
+
+def test_persistence_file_path_traversal(tmp_path):
+    import pytest
+    from aura.persistence.store import PersistenceEngine
+
+    engine = PersistenceEngine(str(tmp_path / "test.db"))
+    with pytest.raises(ValueError):
+        engine.store_file("ns", "../evil.txt", b"data")
+    engine.close()
+
+
+# ---------------------------------------------------------------------------
+# detect_capabilities / AndroidBridge
+# ---------------------------------------------------------------------------
+
+def test_detect_capabilities_keys():
+    from aura.adapters.android_bridge import detect_capabilities
+
+    caps = detect_capabilities()
+    for key in ("platform", "is_termux", "python_version", "architecture",
+                "shells", "tools", "env_vars", "cpu_count", "path_sep"):
+        assert key in caps
+
+
+def test_detect_capabilities_platform_is_string():
+    from aura.adapters.android_bridge import detect_capabilities
+
+    caps = detect_capabilities()
+    assert isinstance(caps["platform"], str)
+    assert caps["platform"] in ("android", "linux", "darwin", "windows", "unknown")
+
+
+def test_android_bridge_run_echo():
+    from aura.adapters.android_bridge import AndroidBridge
+
+    bridge = AndroidBridge()
+    result = bridge.run(["echo", "hello"])
+    assert result.success
+    assert "hello" in result.stdout
+
+
+def test_android_bridge_run_shell():
+    from aura.adapters.android_bridge import AndroidBridge
+
+    bridge = AndroidBridge()
+    result = bridge.run_shell("echo bridge-ok")
+    assert result.success
+    assert "bridge-ok" in result.stdout
+
+
+def test_android_bridge_run_missing_command():
+    from aura.adapters.android_bridge import AndroidBridge
+
+    bridge = AndroidBridge()
+    result = bridge.run(["__no_such_command__"])
+    assert not result.success
+    assert result.returncode in (127, 1, -1)
+
+
+def test_android_bridge_run_timeout():
+    from aura.adapters.android_bridge import AndroidBridge
+
+    bridge = AndroidBridge(timeout=0.01)
+    result = bridge.run(["sleep", "10"])
+    assert result.timed_out or not result.success
+
+
+def test_run_result_str():
+    from aura.adapters.android_bridge import RunResult
+
+    r = RunResult(command=["echo"], returncode=0, stdout="hi", stderr="")
+    assert r.success
+    r2 = RunResult(command=["bad"], returncode=1, stdout="", stderr="err")
+    assert not r2.success
+
+
+# ---------------------------------------------------------------------------
+# ShellCommandExecutor
+# ---------------------------------------------------------------------------
+
+def test_shell_executor_pwd(tmp_path):
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor(cwd=str(tmp_path))
+    assert exe.execute("pwd") == str(tmp_path)
+
+
+def test_shell_executor_echo():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    assert exe.execute("echo hello world") == "hello world"
+
+
+def test_shell_executor_cd(tmp_path):
+    from aura.shell.commands import ShellCommandExecutor
+
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    exe = ShellCommandExecutor(cwd=str(tmp_path))
+    exe.execute(f"cd {sub}")
+    assert exe.cwd == str(sub)
+
+
+def test_shell_executor_mkdir_ls(tmp_path):
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor(cwd=str(tmp_path))
+    exe.execute("mkdir newdir")
+    listing = exe.execute("ls")
+    assert "newdir" in listing
+
+
+def test_shell_executor_touch_cat(tmp_path):
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor(cwd=str(tmp_path))
+    f = tmp_path / "hello.txt"
+    f.write_text("hello")
+    result = exe.execute(f"cat {f}")
+    assert "hello" in result
+
+
+def test_shell_executor_wc(tmp_path):
+    from aura.shell.commands import ShellCommandExecutor
+
+    f = tmp_path / "f.txt"
+    f.write_text("one\ntwo\nthree\n")
+    exe = ShellCommandExecutor(cwd=str(tmp_path))
+    result = exe.execute(f"wc {f}")
+    assert "3" in result
+
+
+def test_shell_executor_date():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    result = exe.execute("date")
+    assert result  # non-empty
+
+
+def test_shell_executor_uname():
+    from aura.shell.commands import ShellCommandExecutor
+    import platform
+
+    exe = ShellCommandExecutor()
+    result = exe.execute("uname")
+    assert platform.system().lower() in result.lower()
+
+
+def test_shell_executor_which():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    result = exe.execute("which python3")
+    # May not be found everywhere but should not raise
+    assert isinstance(result, str)
+
+
+def test_shell_executor_df():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    result = exe.execute("df")
+    assert "Filesystem" in result or "virtual" in result
+
+
+def test_shell_executor_builtin_names():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    names = exe.builtin_names()
+    for expected in ("cd", "ls", "cat", "pwd", "echo", "df", "free", "ps",
+                     "env", "which", "date", "uname", "mkdir", "rm", "cp",
+                     "mv", "touch", "head", "tail", "wc"):
+        assert expected in names
+
+
+def test_shell_executor_unknown_command():
+    from aura.shell.commands import ShellCommandExecutor
+
+    exe = ShellCommandExecutor()
+    result = exe.execute("__no_such_command__")
+    assert "not found" in result or isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# MenuWorkspace
+# ---------------------------------------------------------------------------
+
+def test_menu_workspace_render():
+    from aura.shell.commands import MenuWorkspace
+
+    menu = MenuWorkspace("Choose", ["Alpha", "Beta", "Gamma"])
+    rendered = menu.render()
+    assert "Choose" in rendered
+    assert "[1]" in rendered
+    assert "Alpha" in rendered
+    assert "[3]" in rendered
+
+
+def test_menu_workspace_empty_options():
+    import pytest
+    from aura.shell.commands import MenuWorkspace
+
+    with pytest.raises(ValueError):
+        MenuWorkspace("Title", [])
+
+
+# ---------------------------------------------------------------------------
+# AURaPlugin / PluginManager
+# ---------------------------------------------------------------------------
+
+def test_plugin_manager_register_dispatch():
+    from aura.plugins.manager import AURaPlugin, PluginManager
+
+    class EchoPlugin(AURaPlugin):
+        @property
+        def name(self):
+            return "echo_plugin"
+        @property
+        def description(self):
+            return "echoes args"
+        def execute(self, aios, args):
+            return " ".join(args)
+
+    mgr = PluginManager()
+    mgr.register(EchoPlugin())
+    assert mgr.handles("echo_plugin")
+    result = mgr.dispatch("echo_plugin", ["hello", "world"])
+    assert result == "hello world"
+
+
+def test_plugin_manager_duplicate_raises():
+    import pytest
+    from aura.plugins.manager import AURaPlugin, PluginManager
+
+    class Dummy(AURaPlugin):
+        @property
+        def name(self):
+            return "dup"
+        @property
+        def description(self):
+            return "dup"
+        def execute(self, aios, args):
+            return ""
+
+    mgr = PluginManager()
+    mgr.register(Dummy())
+    with pytest.raises(ValueError):
+        mgr.register(Dummy())
+
+
+def test_plugin_manager_unregister():
+    from aura.plugins.manager import AURaPlugin, PluginManager
+
+    class P(AURaPlugin):
+        @property
+        def name(self):
+            return "p"
+        @property
+        def description(self):
+            return "p"
+        def execute(self, aios, args):
+            return "ok"
+
+    mgr = PluginManager()
+    mgr.register(P())
+    mgr.unregister("p")
+    assert not mgr.handles("p")
+
+
+def test_plugin_manager_list_plugins():
+    from aura.plugins.manager import PluginManager, SystemInfoPlugin, StoragePlugin
+
+    mgr = PluginManager()
+    mgr.register(SystemInfoPlugin())
+    mgr.register(StoragePlugin())
+    plugins = mgr.list_plugins()
+    names = [p["name"] for p in plugins]
+    assert "sysinfo" in names
+    assert "storage" in names
+
+
+def test_plugin_manager_dispatch_unknown():
+    from aura.plugins.manager import PluginManager
+
+    mgr = PluginManager()
+    result = mgr.dispatch("nonexistent")
+    assert result is None
+
+
+def test_system_info_plugin_execute():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.plugins.manager import SystemInfoPlugin
+
+    cfg = AURaConfig()
+    cfg.server.port = 18457
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        plugin = SystemInfoPlugin()
+        result = plugin.execute(aios, [])
+        assert "System Information" in result
+        assert "Python" in result
+
+
+# ---------------------------------------------------------------------------
+# AIOS new dispatch commands
+# ---------------------------------------------------------------------------
+
+def test_aios_dispatch_platform():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18458
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        result = aios.dispatch("platform")
+        assert "Platform" in result
+        assert "Python" in result
+
+
+def test_aios_dispatch_plugins():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18459
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        result = aios.dispatch("plugins")
+        assert "sysinfo" in result
+        assert "storage" in result
+
+
+def test_aios_dispatch_bash():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18460
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        result = aios.dispatch("bash", ["echo", "aura-bash-ok"])
+        assert "aura-bash-ok" in result
+
+
+def test_aios_dispatch_bang_shorthand():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18461
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        result = aios.dispatch("!echo", ["bang-ok"])
+        assert "bang-ok" in result
+
+
+def test_aios_dispatch_kv():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18462
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        aios.dispatch("kv", ["set", "testns", "mykey", "myvalue"])
+        result = aios.dispatch("kv", ["get", "testns", "mykey"])
+        assert result == "myvalue"
+
+        keys_result = aios.dispatch("kv", ["list", "testns"])
+        assert "mykey" in keys_result
+
+        del_result = aios.dispatch("kv", ["del", "testns", "mykey"])
+        assert "deleted" in del_result
+
+
+def test_aios_dispatch_sysinfo_via_plugin():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18463
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        result = aios.dispatch("sysinfo")
+        assert "System Information" in result
+
+
+def test_aios_help_includes_new_commands():
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18464
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        help_text = aios.dispatch("help")
+        assert "platform" in help_text
+        assert "bash" in help_text
+        assert "plugins" in help_text
+        assert "kv" in help_text
+

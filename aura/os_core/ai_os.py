@@ -30,6 +30,9 @@ from aura.ai_engine.engine import AIEngine
 from aura.cloud.virtual_cloud import VirtualCloud
 from aura.cpu.virtual_cpu import VirtualCPU, TaskPriority
 from aura.server.virtual_server import VirtualServer
+from aura.adapters.android_bridge import detect_capabilities, AndroidBridge
+from aura.persistence.store import PersistenceEngine
+from aura.plugins.manager import PluginManager, SystemInfoPlugin, StoragePlugin
 
 _logger = get_logger("aura.os")
 
@@ -57,6 +60,16 @@ class AIOS:
         self._cloud: Optional[VirtualCloud] = None
         self._cpu: Optional[VirtualCPU] = None
         self._server: Optional[VirtualServer] = None
+
+        # Platform capabilities and bridge
+        self._capabilities: dict = {}
+        self._bridge: Optional[AndroidBridge] = None
+
+        # Persistence engine
+        self._persistence: Optional[PersistenceEngine] = None
+
+        # Plugin manager
+        self._plugin_manager: Optional[PluginManager] = None
 
         # OS-level command registry — built-ins are handled in dispatch(),
         # custom commands registered via register_command() live here.
@@ -88,6 +101,21 @@ class AIOS:
     def server(self) -> VirtualServer:
         assert self._server is not None, "AIOS not started"
         return self._server
+
+    @property
+    def capabilities(self) -> dict:
+        """Host platform capabilities detected at boot time."""
+        return self._capabilities
+
+    @property
+    def persistence(self) -> PersistenceEngine:
+        assert self._persistence is not None, "AIOS not started"
+        return self._persistence
+
+    @property
+    def plugin_manager(self) -> PluginManager:
+        assert self._plugin_manager is not None, "AIOS not started"
+        return self._plugin_manager
 
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
@@ -180,21 +208,42 @@ class AIOS:
         self._logger.info("  AURa v%s — Booting AI OS …", self.VERSION)
         self._logger.info("=" * 60)
 
+        # 0a. Platform detection
+        self._logger.info("[0/6] Detecting platform capabilities…")
+        self._capabilities = detect_capabilities()
+        self._bridge = AndroidBridge(capabilities=self._capabilities)
+        self._logger.info(
+            "  Platform: %s  Termux: %s  CPUs: %s",
+            self._capabilities.get("platform"),
+            self._capabilities.get("is_termux"),
+            self._capabilities.get("cpu_count"),
+        )
+
+        # 0b. Persistence + Plugin init
+        self._logger.info("[0/6] Initialising persistence engine…")
+        db_path = os.path.join(self._config.data_dir, "aura.db")
+        self._persistence = PersistenceEngine(db_path)
+
+        self._logger.info("[0/6] Loading plugin manager…")
+        self._plugin_manager = PluginManager(aios=self)
+        self._plugin_manager.register(SystemInfoPlugin())
+        self._plugin_manager.register(StoragePlugin())
+
         # 1. AI Engine (the brain — the only "physical" AI component)
-        self._logger.info("[1/4] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
+        self._logger.info("[1/6] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
         self._ai_engine = AIEngine(self._config.ai_engine)
 
         # 2. Virtual Cloud (large model storage + distributed compute)
-        self._logger.info("[2/4] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
+        self._logger.info("[2/6] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
         self._cloud = VirtualCloud(self._config.cloud)
 
         # 3. Virtual CPU (task scheduler)
-        self._logger.info("[3/4] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
+        self._logger.info("[3/6] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
         self._cpu = VirtualCPU(self._config.cpu)
         self._cpu.start()
 
         # 4. Virtual Server (HTTP API + dashboard)
-        self._logger.info("[4/4] Starting Virtual Server (port %d)…", self._config.server.port)
+        self._logger.info("[4/6] Starting Virtual Server (port %d)…", self._config.server.port)
         self._server = VirtualServer(self._config.server)
         self._server.start(self)
 
@@ -231,6 +280,8 @@ class AIOS:
             self._server.stop()
         if self._cpu:
             self._cpu.stop()
+        if self._persistence:
+            self._persistence.close()
         self._running = False
         EVENT_BUS.publish("aios.stopped", {})
         self._logger.info("AURa AI OS stopped.")
@@ -290,6 +341,11 @@ class AIOS:
         """
         args = args or []
         cmd = command.strip().lower()
+
+        # Handle !<command> shorthand — treat as "bash <command> [args]"
+        if cmd.startswith("!") and cmd != "!":
+            shell_cmd_parts = [cmd[1:]] + args
+            return self.dispatch("bash", shell_cmd_parts)
 
         if cmd == "status":
             s = self.status()
@@ -409,6 +465,83 @@ class AIOS:
         elif cmd == "version":
             return f"AURa v{self.VERSION} — Autonomous Universal Resource Architecture"
 
+        elif cmd in ("bash", "!"):
+            # Execute a shell command via AndroidBridge
+            shell_cmd = " ".join(args) if args else ""
+            if not shell_cmd:
+                return "Usage: bash <command>  (or !<command>)"
+            if self._bridge is None:
+                return "bash: platform bridge not initialised"
+            result = self._bridge.run_shell(shell_cmd)
+            parts_out = []
+            if result.stdout:
+                parts_out.append(result.stdout.rstrip())
+            if result.stderr:
+                parts_out.append(result.stderr.rstrip())
+            if result.timed_out:
+                parts_out.append("(command timed out)")
+            return "\n".join(parts_out) if parts_out else f"(exit {result.returncode})"
+
+        elif cmd == "platform":
+            caps = self._capabilities
+            if not caps:
+                return "platform: capabilities not yet detected"
+            shells_avail = [k for k, v in caps.get("shells", {}).items() if v]
+            tools_avail = [k for k, v in caps.get("tools", {}).items() if v]
+            return (
+                f"Platform   : {caps.get('platform')}\n"
+                f"Termux     : {caps.get('is_termux')}\n"
+                f"Python     : {caps.get('python_version')}\n"
+                f"Arch       : {caps.get('architecture')}\n"
+                f"CPUs       : {caps.get('cpu_count')}\n"
+                f"Shells     : {', '.join(shells_avail) or '(none)'}\n"
+                f"Tools      : {', '.join(tools_avail) or '(none)'}"
+            )
+
+        elif cmd == "plugins":
+            if self._plugin_manager is None:
+                return "plugins: manager not initialised"
+            plugins = self._plugin_manager.list_plugins()
+            if not plugins:
+                return "No plugins registered."
+            lines = [f"Registered plugins ({len(plugins)}):"]
+            for p in plugins:
+                lines.append(f"  • {p['name']:<16} — {p['description']}")
+            return "\n".join(lines)
+
+        elif cmd == "kv":
+            if self._persistence is None:
+                return "kv: persistence engine not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "set" and len(args) >= 4:
+                ns, key, val = args[1], args[2], " ".join(args[3:])
+                self._persistence.set(ns, key, val)
+                return f"kv: set {ns}/{key}"
+            elif sub == "get" and len(args) >= 3:
+                ns, key = args[1], args[2]
+                val = self._persistence.get(ns, key)
+                return str(val) if val is not None else f"kv: {ns}/{key} not found"
+            elif sub == "del" and len(args) >= 3:
+                ns, key = args[1], args[2]
+                removed = self._persistence.delete(ns, key)
+                return f"kv: deleted {ns}/{key}" if removed else f"kv: {ns}/{key} not found"
+            elif sub == "list" and len(args) >= 2:
+                ns = args[1]
+                keys = self._persistence.list_keys(ns)
+                return "\n".join(f"  {k}" for k in keys) if keys else f"kv: no keys in {ns}"
+            elif sub == "namespaces":
+                nss = self._persistence.namespaces()
+                return "\n".join(f"  {n}" for n in nss) if nss else "kv: no namespaces"
+            else:
+                return (
+                    "Usage:\n"
+                    "  kv set <ns> <key> <value>\n"
+                    "  kv get <ns> <key>\n"
+                    "  kv del <ns> <key>\n"
+                    "  kv list <ns>\n"
+                    "  kv namespaces"
+                )
+
         elif cmd in ("help", "?"):
             base = (
                 "AURa OS Commands:\n"
@@ -426,6 +559,10 @@ class AIOS:
                 "  history       — show conversation history\n"
                 "  clear_history — clear conversation history\n"
                 "  version       — show AURa version\n"
+                "  platform      — show detected platform capabilities\n"
+                "  plugins       — list registered plugins\n"
+                "  bash <cmd>    — run a shell command (!<cmd> also works)\n"
+                "  kv …          — key-value persistence store\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
@@ -439,6 +576,10 @@ class AIOS:
         elif cmd in self._commands:
             # Custom registered command
             return self._commands[cmd](self, args)
+
+        elif self._plugin_manager is not None and self._plugin_manager.handles(cmd):
+            # Plugin-provided command
+            return self._plugin_manager.dispatch(cmd, args) or ""
 
         else:
             # Unknown command → route to AI engine

@@ -209,7 +209,7 @@ class AIOS:
         self._logger.info("=" * 60)
 
         # 0a. Platform detection
-        self._logger.info("[0/6] Detecting platform capabilities…")
+        self._logger.info("[0a/6] Detecting platform capabilities…")
         self._capabilities = detect_capabilities()
         self._bridge = AndroidBridge(capabilities=self._capabilities)
         self._logger.info(
@@ -220,11 +220,11 @@ class AIOS:
         )
 
         # 0b. Persistence + Plugin init
-        self._logger.info("[0/6] Initialising persistence engine…")
+        self._logger.info("[0b/6] Initialising persistence engine…")
         db_path = os.path.join(self._config.data_dir, "aura.db")
         self._persistence = PersistenceEngine(db_path)
 
-        self._logger.info("[0/6] Loading plugin manager…")
+        self._logger.info("[0c/6] Loading plugin manager…")
         self._plugin_manager = PluginManager(aios=self)
         self._plugin_manager.register(SystemInfoPlugin())
         self._plugin_manager.register(StoragePlugin())

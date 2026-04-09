@@ -243,8 +243,7 @@ class ShellCommandExecutor:
             try:
                 if os.path.isdir(path):
                     if recursive:
-                        import shutil as _shutil
-                        _shutil.rmtree(path)
+                        shutil.rmtree(path)
                     else:
                         results.append(f"rm: {target}: is a directory")
                 elif os.path.isfile(path):

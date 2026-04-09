@@ -46,7 +46,7 @@ class AIOS:
     The single physical AI component that bridges all virtual infrastructure.
     """
 
-    VERSION = "1.0.0"
+    VERSION = "1.2.0"
 
     def __init__(self, config: Optional[AURaConfig] = None) -> None:
         self._config = config or AURaConfig.from_env()
@@ -465,6 +465,13 @@ class AIOS:
         elif cmd == "version":
             return f"AURa v{self.VERSION} — Autonomous Universal Resource Architecture"
 
+        elif cmd == "uptime":
+            if self._start_time is None:
+                return "uptime: system not started"
+            from aura.utils import format_uptime
+            elapsed = time.monotonic() - self._start_time
+            return f"Uptime: {format_uptime(elapsed)}"
+
         elif cmd in ("bash", "!"):
             # Execute a shell command via AndroidBridge
             shell_cmd = " ".join(args) if args else ""
@@ -559,6 +566,7 @@ class AIOS:
                 "  history       — show conversation history\n"
                 "  clear_history — clear conversation history\n"
                 "  version       — show AURa version\n"
+                "  uptime        — show system uptime\n"
                 "  platform      — show detected platform capabilities\n"
                 "  plugins       — list registered plugins\n"
                 "  bash <cmd>    — run a shell command (!<cmd> also works)\n"

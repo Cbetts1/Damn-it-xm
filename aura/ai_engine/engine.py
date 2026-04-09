@@ -112,7 +112,7 @@ _BUILTIN_KNOWLEDGE: dict = {
         "I am built on free open-source AI technology.",
     r"hello|hi|hey|greet": "Hello! I'm AURa, your AI OS. How can I assist you today?\n"
         "Type 'help' for a list of commands.",
-    r"version": "AURa v1.0.0 — ready for release.",
+    r"version": "AURa v1.2.0 — ready for release.",
 }
 
 

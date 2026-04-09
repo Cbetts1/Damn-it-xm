@@ -7,7 +7,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name="aura-ai-os",
-    version="1.0.0",
+    version="1.2.0",
     author="AURa Project",
     description="Autonomous Universal Resource Architecture — AI Virtual System",
     long_description=long_description,

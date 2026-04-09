@@ -117,7 +117,7 @@ _DASHBOARD_HTML = """\
   <div class="logo">AURa</div>
   <div>
     <div style="font-weight:600;">Autonomous Universal Resource Architecture</div>
-    <div class="version">v1.0.0 · AI OS Command Center</div>
+    <div class="version">v1.2.0 · AI OS Command Center</div>
   </div>
   <div class="status-dot" title="All systems operational"></div>
 </header>
@@ -132,7 +132,7 @@ _DASHBOARD_HTML = """\
     </div>
     <div class="metric-row">
       <span class="metric-label">Version</span>
-      <span class="metric-value" id="os-version">1.0.0</span>
+      <span class="metric-value" id="os-version">1.2.0</span>
     </div>
     <div class="metric-row">
       <span class="metric-label">AI Backend</span>
@@ -205,7 +205,7 @@ _DASHBOARD_HTML = """\
   </div>
 
 </main>
-<footer>AURa v1.0.0 · Free &amp; Open Source · Built with ❤️ by the AURa Project</footer>
+<footer>AURa v1.2.0 · Free &amp; Open Source · Built with ❤️ by the AURa Project</footer>
 
 <script>
   async function fetchMetrics() {
@@ -213,7 +213,7 @@ _DASHBOARD_HTML = """\
       const r = await fetch('/api/v1/metrics');
       const d = await r.json();
       // OS
-      document.getElementById('os-version').textContent = d.version || '1.0.0';
+      document.getElementById('os-version').textContent = d.version || '1.2.0';
       document.getElementById('os-backend').textContent = d.ai_backend || 'builtin';
       document.getElementById('os-uptime').textContent = fmtUptime(d.uptime_seconds || 0);
       // Cloud

@@ -29,7 +29,7 @@ def _wait_for_server(host: str, port: int, timeout: float = 5.0) -> None:
 def test_default_config_loads():
     from aura.config import AURaConfig
     cfg = AURaConfig()
-    assert cfg.version == "1.0.0"
+    assert cfg.version == "1.2.0"
     assert cfg.cloud.compute_nodes == 8
     assert cfg.cpu.virtual_cores == 64
     assert cfg.server.port == 8000
@@ -320,7 +320,7 @@ def test_virtual_server_api_metrics():
         _wait_for_server("127.0.0.1", 18433)
         with urllib.request.urlopen("http://127.0.0.1:18433/api/v1/metrics", timeout=5) as r:
             data = json.loads(r.read())
-        assert data["version"] == "1.0.0"
+        assert data["version"] == "1.2.0"
         assert "cloud" in data
         assert "cpu" in data
 
@@ -417,7 +417,7 @@ def test_aios_dispatch_version():
     cfg.cpu.virtual_cores = 2
     with AIOS(cfg) as aios:
         out = aios.dispatch("version")
-        assert "1.0.0" in out
+        assert "1.2.0" in out
 
 
 def test_aios_metrics_structure():
@@ -432,7 +432,7 @@ def test_aios_metrics_structure():
         assert "cloud" in m
         assert "cpu" in m
         assert "server" in m
-        assert m["version"] == "1.0.0"
+        assert m["version"] == "1.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -1574,4 +1574,115 @@ def test_aios_help_includes_new_commands():
         assert "bash" in help_text
         assert "plugins" in help_text
         assert "kv" in help_text
+
+
+# ---------------------------------------------------------------------------
+# v1.2.0 — Shell enhancements: parse_flags, pipe operator, uptime, history
+# ---------------------------------------------------------------------------
+
+def test_parse_flags_long_form():
+    """parse_flags should extract --key value pairs and leave positionals."""
+    from aura.shell.shell import parse_flags
+    flags, positional = parse_flags(["--limit", "10", "foo", "--verbose"])
+    assert flags == {"limit": "10", "verbose": "true"}
+    assert positional == ["foo"]
+
+
+def test_parse_flags_short_form():
+    """parse_flags should handle single-char -k value flags."""
+    from aura.shell.shell import parse_flags
+    flags, positional = parse_flags(["-n", "5", "bar"])
+    assert flags["n"] == "5"
+    assert positional == ["bar"]
+
+
+def test_parse_flags_positional_only():
+    """parse_flags with no flags returns empty dict and all args as positional."""
+    from aura.shell.shell import parse_flags
+    flags, positional = parse_flags(["hello", "world"])
+    assert flags == {}
+    assert positional == ["hello", "world"]
+
+
+def test_parse_flags_empty():
+    """parse_flags on empty list returns empty dict and empty list."""
+    from aura.shell.shell import parse_flags
+    flags, positional = parse_flags([])
+    assert flags == {}
+    assert positional == []
+
+
+def test_shell_pipe_two_stages():
+    """Pipe operator should pass left-side output as context to right side."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.shell.shell import AURaShell
+
+    cfg = AURaConfig()
+    cfg.server.port = 18470
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        shell = AURaShell(aios)
+        # "version | ask" should not raise and should return True
+        result = shell._handle_line("version | ask what version is this")
+        assert result is True
+
+
+def test_shell_pipe_single_segment():
+    """A line with no pipe should behave identically to standard dispatch."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.shell.shell import AURaShell
+
+    cfg = AURaConfig()
+    cfg.server.port = 18471
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        shell = AURaShell(aios)
+        assert shell._handle_line("version") is True
+
+
+def test_shell_uptime_dispatch():
+    """'uptime' command should return an uptime string after boot."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18472
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        out = aios.dispatch("uptime")
+        assert "Uptime" in out
+        assert "h" in out and "m" in out and "s" in out
+
+
+def test_shell_help_includes_uptime():
+    """'help' output should list the uptime command."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18473
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        help_text = aios.dispatch("help")
+        assert "uptime" in help_text
+
+
+def test_shell_banner_contains_version():
+    """The shell banner string should reference the current version."""
+    from aura.shell.shell import _BANNER
+    assert "1.2.0" in _BANNER
+
+
+def test_shell_commands_list_complete():
+    """_SHELL_COMMANDS should include all primary built-in commands."""
+    from aura.shell.shell import _SHELL_COMMANDS
+    for cmd in ("status", "metrics", "cloud", "cpu", "ask", "help",
+                "exit", "quit", "uptime", "platform", "plugins"):
+        assert cmd in _SHELL_COMMANDS, f"Missing command in _SHELL_COMMANDS: {cmd}"
 

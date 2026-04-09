@@ -1,3 +1,5 @@
+# Copyright (c) 2024-2026 AURa Project (Cbetts1/Damn-it-xm). All rights reserved.
+# SPDX-License-Identifier: MIT
 """
 AURa AI OS (AIOS)
 =================
@@ -46,7 +48,7 @@ class AIOS:
     The single physical AI component that bridges all virtual infrastructure.
     """
 
-    VERSION = "1.1.0"
+    VERSION = "1.2.0"
 
     def __init__(self, config: Optional[AURaConfig] = None) -> None:
         self._config = config or AURaConfig.from_env()

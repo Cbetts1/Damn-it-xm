@@ -67,7 +67,7 @@ class AIOS:
     The single physical AI component that bridges all virtual infrastructure.
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(self, config: Optional[AURaConfig] = None) -> None:
         self._config = config or AURaConfig.from_env()

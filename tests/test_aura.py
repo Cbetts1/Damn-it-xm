@@ -433,3 +433,644 @@ def test_aios_metrics_structure():
         assert "cpu" in m
         assert "server" in m
         assert m["version"] == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Cloud resource scheduling
+# ---------------------------------------------------------------------------
+
+def test_virtual_cloud_resource_scheduling():
+    """Submitting a CPU task should increase node resource usage in VirtualCloud."""
+    import time
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18441
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    cfg.cpu.max_concurrent_tasks = 2
+
+    with AIOS(cfg) as aios:
+        # Baseline: all nodes should have zero used resources
+        nodes_before = aios.cloud.list_nodes()
+        total_used_vcpus_before = sum(n["used_vcpus"] for n in nodes_before)
+        assert total_used_vcpus_before == 0
+
+        # Submit a task that blocks briefly so we can observe allocation
+        barrier = __import__("threading").Event()
+        def slow_work():
+            barrier.wait(timeout=3)
+            return "done"
+
+        tid = aios.cpu.submit(slow_work, name="sched_test")
+
+        # Give the worker thread time to pick up the task
+        time.sleep(0.2)
+
+        nodes_during = aios.cloud.list_nodes()
+        total_used_during = sum(n["used_vcpus"] for n in nodes_during)
+        assert total_used_during > 0, "Node vCPUs should be non-zero while task is running"
+
+        # Unblock the task and wait for it to finish
+        barrier.set()
+        for _ in range(50):
+            t = aios.cpu.get_task(tid)
+            if t and t["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.1)
+
+        # Resources should have been released
+        nodes_after = aios.cloud.list_nodes()
+        total_used_after = sum(n["used_vcpus"] for n in nodes_after)
+        assert total_used_after == 0, "Node vCPUs should be released after task completes"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Expanded test coverage: EventBus.publish_all
+# ---------------------------------------------------------------------------
+
+def test_event_bus_publish_all():
+    """publish_all should deliver to both the specific event type and the '*' wildcard."""
+    from aura.utils import EventBus
+    bus = EventBus()
+    specific = []
+    wildcard = []
+    bus.subscribe("my.event", lambda e, p: specific.append(p))
+    bus.subscribe("*", lambda e, p: wildcard.append(p))
+    bus.publish_all("my.event", {"x": 1})
+    assert len(specific) == 1
+    assert specific[0] == {"x": 1}
+    # wildcard receives a wrapper dict with "event" and "payload" keys
+    assert len(wildcard) == 1
+    assert wildcard[0]["event"] == "my.event"
+    assert wildcard[0]["payload"] == {"x": 1}
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Expanded test coverage: AURaShell._handle_line
+# ---------------------------------------------------------------------------
+
+def test_shell_handle_line_exit():
+    """_handle_line should return False on 'exit' and 'quit'."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.shell.shell import AURaShell
+
+    cfg = AURaConfig()
+    cfg.server.port = 18442
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        shell = AURaShell(aios)
+        assert shell._handle_line("exit") is False
+        assert shell._handle_line("quit") is False
+
+
+def test_shell_handle_line_empty():
+    """_handle_line should return True (continue) for blank input."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.shell.shell import AURaShell
+
+    cfg = AURaConfig()
+    cfg.server.port = 18443
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        shell = AURaShell(aios)
+        assert shell._handle_line("") is True
+        assert shell._handle_line("   ") is True
+
+
+def test_shell_handle_line_known_command():
+    """_handle_line should dispatch known commands and return True."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.shell.shell import AURaShell
+
+    cfg = AURaConfig()
+    cfg.server.port = 18444
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        shell = AURaShell(aios)
+        # 'version' is a built-in command; should not raise and return True
+        assert shell._handle_line("version") is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Expanded test coverage: TUIMonitor._render_frame
+# ---------------------------------------------------------------------------
+
+def test_tui_monitor_render_frame():
+    """_render_frame should return a non-empty string containing component names."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.command_center.monitor import _render_frame
+
+    cfg = AURaConfig()
+    cfg.server.port = 18445
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    with AIOS(cfg) as aios:
+        frame = _render_frame(aios)
+        assert isinstance(frame, str)
+        assert len(frame) > 0
+        assert "AURa" in frame
+        assert "Virtual Cloud" in frame
+        assert "Virtual CPU" in frame
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Expanded test coverage: mock-based OpenAICompatibleBackend
+# ---------------------------------------------------------------------------
+
+def test_openai_compatible_backend_success():
+    """OpenAICompatibleBackend should parse a successful API response."""
+    import sys
+    from types import ModuleType
+    from unittest.mock import MagicMock
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import OpenAICompatibleBackend
+
+    cfg = AIEngineConfig(backend="openai_compatible", model_name="test-model", api_base_url="http://localhost:11434/v1")
+
+    # Build a minimal fake httpx module so the backend can import it
+    fake_httpx = ModuleType("httpx")
+    mock_client_instance = MagicMock()
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": "Hello from mock"}}],
+        "usage": {"total_tokens": 10},
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_client_instance.post.return_value = mock_response
+    fake_httpx.Client = MagicMock(return_value=mock_client_instance)
+
+    original = sys.modules.get("httpx")
+    sys.modules["httpx"] = fake_httpx
+    try:
+        backend = OpenAICompatibleBackend(cfg)
+        assert backend.is_ready() is True
+        resp = backend.generate("hi")
+        assert resp.text == "Hello from mock"
+        assert resp.tokens_used == 10
+    finally:
+        if original is None:
+            sys.modules.pop("httpx", None)
+        else:
+            sys.modules["httpx"] = original
+
+
+def test_openai_compatible_backend_api_error():
+    """OpenAICompatibleBackend should handle API errors gracefully."""
+    import sys
+    from types import ModuleType
+    from unittest.mock import MagicMock
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import OpenAICompatibleBackend
+
+    cfg = AIEngineConfig(backend="openai_compatible", model_name="test-model", api_base_url="http://localhost:11434/v1")
+
+    fake_httpx = ModuleType("httpx")
+    mock_client_instance = MagicMock()
+    mock_client_instance.post.side_effect = Exception("connection refused")
+    fake_httpx.Client = MagicMock(return_value=mock_client_instance)
+
+    original = sys.modules.get("httpx")
+    sys.modules["httpx"] = fake_httpx
+    try:
+        backend = OpenAICompatibleBackend(cfg)
+        resp = backend.generate("hi")
+        assert "API error" in resp.text or "connection refused" in resp.text
+    finally:
+        if original is None:
+            sys.modules.pop("httpx", None)
+        else:
+            sys.modules["httpx"] = original
+
+
+def test_openai_compatible_backend_no_httpx():
+    """OpenAICompatibleBackend should degrade gracefully when httpx is missing."""
+    from unittest.mock import patch
+    import sys
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import OpenAICompatibleBackend
+
+    cfg = AIEngineConfig(backend="openai_compatible")
+    # Simulate httpx not being installed
+    with patch.dict(sys.modules, {"httpx": None}):
+        backend = OpenAICompatibleBackend(cfg)
+        assert backend.is_ready() is False
+        resp = backend.generate("hi")
+        assert "not ready" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Expanded test coverage: mock-based TransformersBackend
+# ---------------------------------------------------------------------------
+
+def test_transformers_backend_success():
+    """TransformersBackend should parse pipeline output correctly."""
+    from unittest.mock import MagicMock, patch
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import TransformersBackend
+
+    cfg = AIEngineConfig(backend="transformers", model_name="mock-model")
+
+    mock_pipeline = MagicMock()
+    mock_pipeline.return_value = [{"generated_text": "Hello! Nice to meet you."}]
+    mock_pipeline.tokenizer.eos_token_id = 0
+
+    with patch("aura.ai_engine.engine.TransformersBackend._load_model") as mock_load:
+        backend = TransformersBackend.__new__(TransformersBackend)
+        backend._config = cfg
+        backend._pipeline = mock_pipeline
+        backend._ready = True
+
+        resp = backend.generate("Hello")
+        assert resp.text  # non-empty
+        assert resp.model == "mock-model"
+
+
+def test_transformers_backend_no_transformers():
+    """TransformersBackend should report not ready when transformers is missing."""
+    import sys
+    from unittest.mock import patch
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import TransformersBackend
+
+    cfg = AIEngineConfig(backend="transformers", model_name="mock-model")
+    with patch.dict(sys.modules, {"transformers": None, "torch": None}):
+        backend = TransformersBackend(cfg)
+        assert backend.is_ready() is False
+        resp = backend.generate("hello")
+        assert "not ready" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — New REST endpoints
+# ---------------------------------------------------------------------------
+
+def test_api_cloud_nodes_add_and_delete():
+    """POST /api/v1/cloud/nodes should add a node; DELETE should remove it."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18446
+    cfg.server.host = "127.0.0.1"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18446)
+
+        # Add a node via POST
+        payload = json.dumps({"vcpus": 4, "memory_gb": 16.0}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:18446/api/v1/cloud/nodes",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert r.status == 201
+            data = json.loads(r.read())
+        node_id = data["node_id"]
+        assert data["vcpus"] == 4
+
+        # Verify list grew
+        with urllib.request.urlopen("http://127.0.0.1:18446/api/v1/metrics", timeout=5) as r:
+            metrics = json.loads(r.read())
+        assert metrics["cloud"]["nodes_total"] == 3
+
+        # Delete the node via DELETE
+        req_del = urllib.request.Request(
+            f"http://127.0.0.1:18446/api/v1/cloud/nodes/{node_id}",
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req_del, timeout=5) as r:
+            assert r.status == 200
+            del_data = json.loads(r.read())
+        assert del_data["removed"] == node_id
+
+        # Back to 2 nodes
+        with urllib.request.urlopen("http://127.0.0.1:18446/api/v1/metrics", timeout=5) as r:
+            metrics = json.loads(r.read())
+        assert metrics["cloud"]["nodes_total"] == 2
+
+
+def test_api_tasks_by_id():
+    """GET /api/v1/tasks/<id> should return the task details."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18447
+    cfg.server.host = "127.0.0.1"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18447)
+
+        # Submit a task via the existing /api/v1/task endpoint
+        payload = json.dumps({"name": "id_test_task", "duration_ms": 0}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:18447/api/v1/task",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            resp = json.loads(r.read())
+        task_id = resp["task_id"]
+
+        # Wait briefly for the task to finish (poll instead of fixed sleep)
+        for _ in range(50):
+            t = aios.cpu.get_task(task_id)
+            if t and t["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.1)
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:18447/api/v1/tasks/{task_id}", timeout=5
+        ) as r:
+            task = json.loads(r.read())
+        assert task["task_id"] == task_id
+        assert task["name"] == "id_test_task"
+
+
+def test_api_plan_endpoint():
+    """POST /api/v1/plan should return a plan text."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18448
+    cfg.server.host = "127.0.0.1"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18448)
+        payload = json.dumps({"task": "deploy a new cloud node"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:18448/api/v1/plan",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        assert "plan" in data
+        assert data["plan"]
+
+
+def test_api_analyse_endpoint():
+    """POST /api/v1/analyse should return an analysis text."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18449
+    cfg.server.host = "127.0.0.1"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18449)
+        payload = json.dumps({"metrics": {"cpu_pct": 5}}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:18449/api/v1/analyse",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        assert "analysis" in data
+        assert data["analysis"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Auth
+# ---------------------------------------------------------------------------
+
+def test_api_auth_rejects_without_token():
+    """When auth_enabled=True, requests without a token must get 401."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18450
+    cfg.server.host = "127.0.0.1"
+    cfg.server.auth_enabled = True
+    cfg.server.api_token = "secret-token"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18450)
+        try:
+            urllib.request.urlopen("http://127.0.0.1:18450/api/v1/status", timeout=5)
+            assert False, "Expected HTTPError 401"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+
+
+def test_api_auth_allows_with_token():
+    """When auth_enabled=True, requests with the correct token must succeed."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18451
+    cfg.server.host = "127.0.0.1"
+    cfg.server.auth_enabled = True
+    cfg.server.api_token = "secret-token"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18451)
+        req = urllib.request.Request(
+            "http://127.0.0.1:18451/api/v1/status",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        assert data["running"] is True
+
+
+def test_api_auth_health_always_public():
+    """/health must be accessible even when auth_enabled=True."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18452
+    cfg.server.host = "127.0.0.1"
+    cfg.server.auth_enabled = True
+    cfg.server.api_token = "secret-token"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        _wait_for_server("127.0.0.1", 18452)
+        # No auth header — should still return 200
+        with urllib.request.urlopen("http://127.0.0.1:18452/health", timeout=5) as r:
+            assert r.status == 200
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — JSON state persistence
+# ---------------------------------------------------------------------------
+
+def test_aios_state_persistence(tmp_path):
+    """State saved on stop() should be restored on the next start()."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    data_dir = str(tmp_path / "aura_state_test")
+
+    cfg1 = AURaConfig()
+    cfg1.server.port = 18453
+    cfg1.cloud.compute_nodes = 2
+    cfg1.cpu.virtual_cores = 2
+    cfg1.data_dir = data_dir
+
+    with AIOS(cfg1) as aios1:
+        aios1.ai_engine.ask("remember this")
+
+    # Second instance — should restore history
+    cfg2 = AURaConfig()
+    cfg2.server.port = 18454
+    cfg2.cloud.compute_nodes = 2
+    cfg2.cpu.virtual_cores = 2
+    cfg2.data_dir = data_dir
+
+    with AIOS(cfg2) as aios2:
+        history = aios2.ai_engine.get_history()
+        # History should include the message from the previous session
+        user_msgs = [h for h in history if h["role"] == "user" and "remember this" in h["content"]]
+        assert len(user_msgs) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Streaming (BuiltinBackend)
+# ---------------------------------------------------------------------------
+
+def test_builtin_backend_stream():
+    """BuiltinBackend.stream() should yield multiple chunks that reassemble correctly."""
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import BuiltinBackend
+
+    be = BuiltinBackend(AIEngineConfig())
+    be.STREAM_TOKEN_DELAY = 0  # disable delay for fast tests
+    chunks = list(be.stream("hello"))
+    assert len(chunks) > 1, "Expected multiple word chunks"
+    combined = "".join(chunks)
+    # Should match the non-streaming response
+    full_resp = be.generate("hello")
+    assert combined == full_resp.text
+
+
+def test_ai_engine_stream():
+    """AIEngine.stream() should yield tokens and add history entry."""
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import AIEngine, BuiltinBackend
+
+    engine = AIEngine(AIEngineConfig())
+    # Disable streaming delay for speed
+    engine._backend.STREAM_TOKEN_DELAY = 0
+    chunks = list(engine.stream("hello"))
+    assert chunks, "Expected at least one chunk"
+    combined = "".join(chunks)
+    assert combined
+    # History should be updated
+    history = engine.get_history()
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == combined
+
+
+def test_api_ask_stream_endpoint():
+    """GET /api/v1/ask/stream should return SSE tokens ending with [DONE]."""
+    import json
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    from aura.ai_engine.engine import BuiltinBackend
+
+    cfg = AURaConfig()
+    cfg.server.port = 18455
+    cfg.server.host = "127.0.0.1"
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        # Disable streaming delay for speed
+        aios.ai_engine._backend.STREAM_TOKEN_DELAY = 0
+        _wait_for_server("127.0.0.1", 18455)
+        url = "http://127.0.0.1:18455/api/v1/ask/stream?prompt=hello"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            raw = r.read().decode()
+        assert "[DONE]" in raw
+        assert "data:" in raw
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Plugin registries
+# ---------------------------------------------------------------------------
+
+def test_backend_plugin_registry():
+    """A custom backend registered with AIEngine.register_backend should be usable."""
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.engine import AIEngine, BaseBackend, AIResponse
+
+    class EchoBackend(BaseBackend):
+        def __init__(self, config):
+            pass
+        def is_ready(self):
+            return True
+        def generate(self, prompt, system_prompt="", **kw):
+            return AIResponse(text=f"ECHO:{prompt}", model="echo")
+
+    AIEngine.register_backend("echo", EchoBackend)
+    cfg = AIEngineConfig(backend="echo")
+    engine = AIEngine(cfg)
+    resp = engine.ask("test")
+    assert resp.text.startswith("ECHO:")
+
+
+def test_aios_register_command():
+    """A custom command registered with AIOS.register_command should be dispatchable."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    cfg = AURaConfig()
+    cfg.server.port = 18456
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        def cmd_ping(aios_ref, args):
+            return "pong:" + (" ".join(args) if args else "")
+
+        aios.register_command("ping", cmd_ping)
+        result = aios.dispatch("ping", ["world"])
+        assert result == "pong:world"
+
+        # Custom command should appear in help
+        help_text = aios.dispatch("help")
+        assert "ping" in help_text
+

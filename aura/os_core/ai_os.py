@@ -17,6 +17,8 @@ storage, and serving is done through its managed virtual layer.
 
 from __future__ import annotations
 
+import json
+import os
 import signal
 import time
 import threading
@@ -56,7 +58,8 @@ class AIOS:
         self._cpu: Optional[VirtualCPU] = None
         self._server: Optional[VirtualServer] = None
 
-        # OS-level command registry
+        # OS-level command registry — built-ins are handled in dispatch(),
+        # custom commands registered via register_command() live here.
         self._commands: Dict[str, Callable] = {}
 
         # Event subscriptions
@@ -85,6 +88,84 @@ class AIOS:
     def server(self) -> VirtualServer:
         assert self._server is not None, "AIOS not started"
         return self._server
+
+    # ------------------------------------------------------------------
+    # Plugin registry — custom shell commands
+    # ------------------------------------------------------------------
+
+    def register_command(self, name: str, fn: Callable) -> None:
+        """Register a custom shell command.
+
+        ``fn`` receives ``(aios, args)`` where *aios* is this instance and
+        *args* is a ``List[str]`` of additional tokens from the shell input.
+        It must return a ``str`` that will be printed in the shell.
+
+        Example::
+
+            def cmd_greet(aios, args):
+                return "Hello, " + (" ".join(args) or "world") + "!"
+
+            aios.register_command("greet", cmd_greet)
+        """
+        self._commands[name.lower()] = fn
+        self._logger.info("Custom command registered: %s", name)
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    def _state_path(self) -> str:
+        return os.path.join(self._config.data_dir, "state.json")
+
+    def _save_state(self) -> None:
+        """Persist model registry, conversation history, and task list."""
+        if self._ai_engine is None and self._cloud is None and self._cpu is None:
+            return
+        state: dict = {}
+        if self._ai_engine is not None:
+            state["conversation_history"] = self._ai_engine.get_history()
+        if self._cloud is not None:
+            state["model_registry"] = self._cloud.list_models()
+        if self._cpu is not None:
+            state["tasks"] = self._cpu.list_tasks()
+        state["saved_at"] = utcnow()
+        try:
+            os.makedirs(self._config.data_dir, exist_ok=True)
+            with open(self._state_path(), "w", encoding="utf-8") as fh:
+                json.dump(state, fh, indent=2, default=str)
+            self._logger.info("State saved to %s", self._state_path())
+        except OSError as exc:
+            self._logger.warning("Could not save state: %s", exc)
+
+    def _load_state(self) -> None:
+        """Restore persisted state if a state file exists."""
+        path = self._state_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                state = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            self._logger.warning("Could not load state from %s: %s", path, exc)
+            return
+
+        if self._ai_engine is not None:
+            history = state.get("conversation_history", [])
+            if history:
+                self._ai_engine.load_history(history)
+                self._logger.info("Restored %d history entries", len(history))
+
+        if self._cloud is not None:
+            for entry in state.get("model_registry", []):
+                mid = entry.get("model_id")
+                if mid and mid not in {m["model_id"] for m in self._cloud.list_models()}:
+                    self._cloud.register_model(
+                        model_id=mid,
+                        model_name=entry.get("model_name", "unknown"),
+                        size_bytes=entry.get("size_bytes", 0),
+                        backend=entry.get("backend", "builtin"),
+                    )
+            self._logger.info("Model registry restored")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -125,6 +206,9 @@ class AIOS:
             backend=self._config.ai_engine.backend,
         )
 
+        # Restore persisted state (history, extra models)
+        self._load_state()
+
         self._start_time = time.monotonic()
         self._running = True
 
@@ -141,6 +225,8 @@ class AIOS:
         if not self._running:
             return
         self._logger.info("AURa AI OS shutting down…")
+        # Persist state before tearing down subsystems
+        self._save_state()
         if self._server:
             self._server.stop()
         if self._cpu:
@@ -324,7 +410,7 @@ class AIOS:
             return f"AURa v{self.VERSION} — Autonomous Universal Resource Architecture"
 
         elif cmd in ("help", "?"):
-            return (
+            base = (
                 "AURa OS Commands:\n"
                 "  status        — system health overview\n"
                 "  metrics       — detailed component metrics\n"
@@ -343,6 +429,16 @@ class AIOS:
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
+            if self._commands:
+                custom = "\n".join(
+                    f"  {name:<14}— (custom command)" for name in sorted(self._commands)
+                )
+                return base + "\n\nCustom commands:\n" + custom
+            return base
+
+        elif cmd in self._commands:
+            # Custom registered command
+            return self._commands[cmd](self, args)
 
         else:
             # Unknown command → route to AI engine

@@ -122,6 +122,10 @@ class BuiltinBackend(BaseBackend):
     Works with zero dependencies — perfect for offline use or as a fallback.
     """
 
+    # Delay between yielded words when streaming (seconds).
+    # Can be overridden via AIEngineConfig or set to 0 for instant streaming.
+    STREAM_TOKEN_DELAY: float = 0.03
+
     def __init__(self, config: AIEngineConfig) -> None:
         self._config = config
         _logger.info("Builtin AI backend initialised")
@@ -129,33 +133,45 @@ class BuiltinBackend(BaseBackend):
     def is_ready(self) -> bool:
         return True
 
-    def generate(self, prompt: str, system_prompt: str = "", **kwargs) -> AIResponse:
-        t0 = time.monotonic()
+    def _build_response_text(self, prompt: str) -> str:
+        """Return the full text response for *prompt* (pure function, no I/O)."""
         lower = prompt.lower().strip()
-
         for pattern, reply in _BUILTIN_KNOWLEDGE.items():
             if re.search(pattern, lower):
-                return AIResponse(
-                    text=reply,
-                    model="aura-builtin-1.0",
-                    tokens_used=len(prompt.split()),
-                    latency_ms=(time.monotonic() - t0) * 1000,
-                )
-
-        # Fallback — thoughtful generic response
-        fallback = (
+                return reply
+        return (
             f"AURa understood your request: '{prompt}'\n"
             "Processing through the AI OS… The virtual components are analysing your input.\n"
             "For richer responses, configure a Hugging Face or OpenAI-compatible backend:\n"
             "  export AURA_AI_BACKEND=transformers\n"
             "  export AURA_MODEL_NAME=microsoft/DialoGPT-medium"
         )
+
+    def generate(self, prompt: str, system_prompt: str = "", **kwargs) -> AIResponse:
+        t0 = time.monotonic()
+        text = self._build_response_text(prompt)
         return AIResponse(
-            text=fallback,
+            text=text,
             model="aura-builtin-1.0",
             tokens_used=len(prompt.split()),
             latency_ms=(time.monotonic() - t0) * 1000,
         )
+
+    def stream(self, prompt: str, system_prompt: str = "", **kwargs) -> Generator[str, None, None]:
+        """Yield the response token-by-token with a small delay to simulate streaming.
+
+        Uses a regex tokeniser so that original whitespace (including newlines and
+        multiple consecutive spaces) is preserved exactly.
+        """
+        import re as _re
+        text = self._build_response_text(prompt)
+        # Split into alternating non-whitespace/whitespace tokens, preserving both
+        tokens = _re.split(r"(\s+)", text)
+        for token in tokens:
+            if token:  # skip empty strings from edge-case splits
+                yield token
+            if self.STREAM_TOKEN_DELAY > 0:
+                time.sleep(self.STREAM_TOKEN_DELAY)
 
 
 # ---------------------------------------------------------------------------
@@ -307,16 +323,38 @@ class OpenAICompatibleBackend(BaseBackend):
 
 
 # ---------------------------------------------------------------------------
-# Engine factory
+# Engine factory & plugin registry
 # ---------------------------------------------------------------------------
 
+# Mutable backend registry — external packages may call register_backend()
+# to add new named backends without patching this module.
+_BACKEND_REGISTRY: dict = {
+    "builtin": BuiltinBackend,
+    "transformers": TransformersBackend,
+    "openai_compatible": OpenAICompatibleBackend,
+}
+
+
+def register_backend(name: str, cls: type) -> None:
+    """Register a custom AI backend under *name* in the global registry.
+
+    Example::
+
+        from aura.ai_engine.engine import register_backend, BaseBackend
+
+        class MyBackend(BaseBackend):
+            ...
+
+        register_backend("my_backend", MyBackend)
+    """
+    if not issubclass(cls, BaseBackend):
+        raise TypeError(f"{cls} must be a subclass of BaseBackend")
+    _BACKEND_REGISTRY[name] = cls
+    _logger.info("Registered custom AI backend: %s → %s", name, cls.__name__)
+
+
 def create_backend(config: AIEngineConfig) -> BaseBackend:
-    backend_map = {
-        "builtin": BuiltinBackend,
-        "transformers": TransformersBackend,
-        "openai_compatible": OpenAICompatibleBackend,
-    }
-    cls = backend_map.get(config.backend, BuiltinBackend)
+    cls = _BACKEND_REGISTRY.get(config.backend, BuiltinBackend)
     _logger.info("Creating AI backend: %s", cls.__name__)
     return cls(config)
 
@@ -346,6 +384,19 @@ class AIEngine:
         self._history: List[dict] = []
         self._logger = get_logger("aura.ai_engine")
 
+    # ------------------------------------------------------------------
+    # Class-level plugin registration (delegates to module-level registry)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def register_backend(cls, name: str, backend_cls: type) -> None:
+        """Register a custom backend so it can be selected via config/env.
+
+        ``AIEngine.register_backend("my_backend", MyBackend)`` makes the
+        backend available as ``AURA_AI_BACKEND=my_backend``.
+        """
+        register_backend(name, backend_cls)
+
     @property
     def backend_name(self) -> str:
         return type(self._backend).__name__
@@ -364,6 +415,18 @@ class AIEngine:
         self._history.append({"role": "user", "content": prompt})
         self._history.append({"role": "assistant", "content": response.text})
         return response
+
+    def stream(self, prompt: str, context: Optional[str] = None) -> Generator[str, None, None]:
+        """Stream the response token-by-token.  Falls back to a single chunk if
+        the backend does not implement true streaming."""
+        sys_prompt = f"{self.SYSTEM_PROMPT}\n\n{context}" if context else self.SYSTEM_PROMPT
+        full_text: List[str] = []
+        for chunk in self._backend.stream(prompt, system_prompt=sys_prompt):
+            full_text.append(chunk)
+            yield chunk
+        combined = "".join(full_text)
+        self._history.append({"role": "user", "content": prompt})
+        self._history.append({"role": "assistant", "content": combined})
 
     def plan_task(self, task_description: str) -> AIResponse:
         """Ask the AI to produce a step-by-step execution plan for a task."""
@@ -387,3 +450,8 @@ class AIEngine:
 
     def get_history(self) -> List[dict]:
         return list(self._history)
+
+    def load_history(self, history: List[dict]) -> None:
+        """Replace the in-memory conversation history (used by persistence layer)."""
+        self._history = list(history)
+

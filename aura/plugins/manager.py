@@ -241,8 +241,8 @@ class StoragePlugin(AURaPlugin):
         return "Show AURa persistence storage statistics"
 
     def execute(self, aios: "AIOS", args: List[str]) -> str:
-        # Try to access the persistence engine attached to the AIOS
-        engine = getattr(aios, "_persistence", None)
+        # Use public property to access the persistence engine.
+        engine = getattr(aios, "persistence", None)
         if engine is None:
             return "storage: persistence engine not available"
 

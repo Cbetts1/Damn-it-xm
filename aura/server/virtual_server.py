@@ -117,7 +117,7 @@ _DASHBOARD_HTML = """\
   <div class="logo">AURa</div>
   <div>
     <div style="font-weight:600;">Autonomous Universal Resource Architecture</div>
-    <div class="version">v1.0.0 · AI OS Command Center</div>
+    <div class="version">v1.1.0 · AI OS Command Center</div>
   </div>
   <div class="status-dot" title="All systems operational"></div>
 </header>
@@ -132,7 +132,7 @@ _DASHBOARD_HTML = """\
     </div>
     <div class="metric-row">
       <span class="metric-label">Version</span>
-      <span class="metric-value" id="os-version">1.0.0</span>
+      <span class="metric-value" id="os-version">1.1.0</span>
     </div>
     <div class="metric-row">
       <span class="metric-label">AI Backend</span>
@@ -205,7 +205,7 @@ _DASHBOARD_HTML = """\
   </div>
 
 </main>
-<footer>AURa v1.0.0 · Free &amp; Open Source · Built with ❤️ by the AURa Project</footer>
+<footer>AURa v1.1.0 · Free &amp; Open Source · Built with ❤️ by the AURa Project</footer>
 
 <script>
   async function fetchMetrics() {
@@ -213,7 +213,7 @@ _DASHBOARD_HTML = """\
       const r = await fetch('/api/v1/metrics');
       const d = await r.json();
       // OS
-      document.getElementById('os-version').textContent = d.version || '1.0.0';
+      document.getElementById('os-version').textContent = d.version || '1.1.0';
       document.getElementById('os-backend').textContent = d.ai_backend || 'builtin';
       document.getElementById('os-uptime').textContent = fmtUptime(d.uptime_seconds || 0);
       // Cloud
@@ -358,6 +358,10 @@ class _AURaHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             return {}
+        # Cap body size at 1 MB to prevent memory exhaustion on mobile.
+        max_body = 1_048_576
+        if length > max_body:
+            return {}
         raw = self.rfile.read(length)
         try:
             return json.loads(raw)
@@ -439,7 +443,7 @@ class _AURaHandler(BaseHTTPRequestHandler):
                 # Signal end of stream
                 self.wfile.write(f"data: {_SSE_DONE_SENTINEL}\n\n".encode())
                 self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, OSError):
                 pass  # client disconnected
 
         else:
@@ -588,7 +592,7 @@ class VirtualServer:
         EVENT_BUS.publish("server.started", {"port": self._config.port})
 
     def stop(self) -> None:
-        if self._httpd:
+        if self._httpd is not None:
             self._httpd.shutdown()
         self._logger.info("Virtual Server stopped")
         EVENT_BUS.publish("server.stopped", {})

@@ -14,6 +14,7 @@ the Virtual CPU, which can delegate overflow to the Virtual Cloud nodes.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -25,6 +26,10 @@ from aura.config import CPUConfig
 from aura.utils import get_logger, generate_id, utcnow, EVENT_BUS
 
 _logger = get_logger("aura.cpu")
+
+# Maximum number of completed/failed tasks to retain in the task registry.
+# Prevents unbounded memory growth on long-running mobile sessions.
+_MAX_TASK_HISTORY: int = 2048
 
 
 class TaskPriority(int, Enum):
@@ -73,6 +78,10 @@ class CPUTask:
         }
 
 
+# Sentinel object used to signal worker threads to shut down.
+_POISON_PILL = object()
+
+
 class VirtualCPU:
     """
     The AURa Virtual CPU.
@@ -84,6 +93,7 @@ class VirtualCPU:
         self._config = config
         self._task_queue: queue.PriorityQueue = queue.PriorityQueue()
         self._tasks: Dict[str, CPUTask] = {}
+        self._finished_order: List[str] = []  # tracks eviction order
         self._workers: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._running = False
@@ -101,7 +111,13 @@ class VirtualCPU:
         if self._running:
             return
         self._running = True
-        num_workers = min(self._config.virtual_cores, self._config.max_concurrent_tasks)
+        # On mobile / Termux, limit workers to actual host CPUs to save RAM.
+        host_cpus = os.cpu_count() or 2
+        num_workers = min(
+            self._config.virtual_cores,
+            self._config.max_concurrent_tasks,
+            max(host_cpus, 2),  # never fewer than 2 workers
+        )
         for i in range(num_workers):
             t = threading.Thread(
                 target=self._worker_loop,
@@ -120,9 +136,9 @@ class VirtualCPU:
 
     def stop(self) -> None:
         self._running = False
-        # Poison pills for each worker
+        # Send sentinel for each worker
         for _ in self._workers:
-            self._task_queue.put((TaskPriority.CRITICAL, None))  # type: ignore[arg-type]
+            self._task_queue.put((TaskPriority.CRITICAL.value, _POISON_PILL))
         self._logger.info("Virtual CPU stopped")
         EVENT_BUS.publish("cpu.stopped", {})
 
@@ -185,7 +201,8 @@ class VirtualCPU:
                 continue
 
             _priority, task = item
-            if task is None:  # poison pill
+            if task is _POISON_PILL:  # shutdown sentinel
+                self._task_queue.task_done()
                 break
             if task.status == TaskStatus.CANCELLED:
                 self._task_queue.task_done()
@@ -216,8 +233,17 @@ class VirtualCPU:
                 with self._lock:
                     task.duration_ms = elapsed_ms
                     task.finished_at = utcnow()
+                    task.fn = None  # release reference to original callable
                     self._active_task_count -= 1
+                    self._finished_order.append(task.task_id)
+                    self._evict_old_tasks()
                 self._task_queue.task_done()
+
+    def _evict_old_tasks(self) -> None:
+        """Remove oldest finished tasks when registry exceeds limit (called under lock)."""
+        while len(self._finished_order) > _MAX_TASK_HISTORY:
+            old_id = self._finished_order.pop(0)
+            self._tasks.pop(old_id, None)
 
     # ------------------------------------------------------------------
     # Metrics

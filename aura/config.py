@@ -39,6 +39,8 @@ class ServerConfig:
     max_connections: int = 1000
     tls_enabled: bool = False
     log_level: str = "info"
+    auth_enabled: bool = False
+    api_token: Optional[str] = None  # set via AURA_API_TOKEN env var
 
 
 @dataclass
@@ -91,6 +93,7 @@ class AURaConfig:
         config.ai_engine.api_key = os.getenv("AURA_API_KEY", config.ai_engine.api_key)
         config.command_center.port = int(os.getenv("AURA_DASHBOARD_PORT", str(config.command_center.port)))
         config.server.port = int(os.getenv("AURA_SERVER_PORT", str(config.server.port)))
+        config.server.api_token = os.getenv("AURA_API_TOKEN", config.server.api_token)
         return config
 
 

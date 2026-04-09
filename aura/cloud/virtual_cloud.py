@@ -121,6 +121,10 @@ class VirtualCloud:
     The AI OS uses this to host large AI models and distribute compute.
     """
 
+    # Resources allocated per task when load-balancing across nodes
+    _TASK_VCPUS: int = 1
+    _TASK_MEMORY_GB: float = 0.5
+
     def __init__(self, config: CloudConfig) -> None:
         self._config = config
         self._nodes: Dict[str, ComputeNode] = {}
@@ -131,6 +135,12 @@ class VirtualCloud:
         self._logger = get_logger("aura.cloud")
         os.makedirs(config.model_cache_dir, exist_ok=True)
         self._provision_nodes()
+        # Track which node is hosting which CPU task (task_id → node_id)
+        self._task_node_map: Dict[str, str] = {}
+        # Subscribe to CPU task lifecycle events to update node resource usage
+        EVENT_BUS.subscribe("cpu.task.submitted", self._on_task_submitted)
+        EVENT_BUS.subscribe("cpu.task.completed", self._on_task_finished)
+        EVENT_BUS.subscribe("cpu.task.failed", self._on_task_finished)
         self._logger.info(
             "Virtual Cloud started — %d nodes, region=%s",
             config.compute_nodes,
@@ -149,6 +159,49 @@ class VirtualCloud:
                 vcpus=8,
                 memory_gb=32.0,
                 region=self._config.region,
+            )
+
+    # ------------------------------------------------------------------
+    # EventBus handlers — keep node resource usage in sync with CPU tasks
+    # ------------------------------------------------------------------
+
+    def _least_loaded_node(self) -> Optional[ComputeNode]:
+        """Return the online node with the lowest CPU utilisation, or None."""
+        online = [n for n in self._nodes.values() if n.status == NodeStatus.ONLINE]
+        if not online:
+            return None
+        return min(online, key=lambda n: n.cpu_utilisation)
+
+    def _on_task_submitted(self, event_type: str, payload: dict) -> None:
+        """Allocate resources on the least-loaded node when a CPU task starts."""
+        task_id = (payload or {}).get("task_id")
+        if not task_id:
+            return
+        with self._lock:
+            node = self._least_loaded_node()
+            if node is None:
+                return
+            node.used_vcpus = min(node.used_vcpus + self._TASK_VCPUS, node.vcpus)
+            node.used_memory_gb = min(
+                node.used_memory_gb + self._TASK_MEMORY_GB, node.memory_gb
+            )
+            self._task_node_map[task_id] = node.node_id
+
+    def _on_task_finished(self, event_type: str, payload: dict) -> None:
+        """Release resources on the node that was running the CPU task."""
+        task_id = (payload or {}).get("task_id")
+        if not task_id:
+            return
+        with self._lock:
+            node_id = self._task_node_map.pop(task_id, None)
+            if node_id is None:
+                return
+            node = self._nodes.get(node_id)
+            if node is None:
+                return
+            node.used_vcpus = max(node.used_vcpus - self._TASK_VCPUS, 0)
+            node.used_memory_gb = max(
+                node.used_memory_gb - self._TASK_MEMORY_GB, 0.0
             )
 
     # ------------------------------------------------------------------

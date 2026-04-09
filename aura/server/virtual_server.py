@@ -242,17 +242,31 @@ _DASHBOARD_HTML = """\
     inp.value = '';
     const log = document.getElementById('chat-log');
     log.innerHTML += '<div><span class="msg-label msg-user">You:</span><span class="msg-user">' + escHtml(msg) + '</span></div>';
+    // Create a placeholder element for the streaming response
+    const respDiv = document.createElement('div');
+    respDiv.innerHTML = '<span class="msg-label msg-aura">AURa:</span><span class="msg-aura" id="stream-resp"></span>';
+    log.appendChild(respDiv);
     log.scrollTop = log.scrollHeight;
+    const respSpan = document.getElementById('stream-resp');
     try {
-      const r = await fetch('/api/v1/ask', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({prompt: msg})
-      });
-      const d = await r.json();
-      log.innerHTML += '<div><span class="msg-label msg-aura">AURa:</span><span class="msg-aura">' + escHtml(d.response || d.error || 'No response') + '</span></div>';
+      const url = '/api/v1/ask/stream?prompt=' + encodeURIComponent(msg);
+      const es = new EventSource(url);
+      es.onmessage = function(e) {
+        if (e.data === '[DONE]') { es.close(); respSpan.removeAttribute('id'); return; }
+        try {
+          const d = JSON.parse(e.data);
+          respSpan.textContent += (d.token || '');
+          log.scrollTop = log.scrollHeight;
+        } catch(_) {}
+      };
+      es.onerror = function() {
+        es.close();
+        if (!respSpan.textContent) respSpan.textContent = '[Stream error]';
+        respSpan.removeAttribute('id');
+      };
     } catch(e) {
-      log.innerHTML += '<div><span class="msg-label msg-aura">AURa:</span><span class="msg-aura">[Error: ' + escHtml(String(e)) + ']</span></div>';
+      respSpan.textContent = '[Error: ' + escHtml(String(e)) + ']';
+      respSpan.removeAttribute('id');
     }
     log.scrollTop = log.scrollHeight;
   }
@@ -280,10 +294,44 @@ _DASHBOARD_HTML = """\
 class _AURaHandler(BaseHTTPRequestHandler):
     """Minimal HTTP request handler for the Virtual Server."""
 
-    aios: Optional["AIOS"] = None  # set by VirtualServer.start()
+    aios: Optional["AIOS"] = None          # set by VirtualServer.start()
+    _server_config = None                   # ServerConfig, set by VirtualServer.start()
 
     def log_message(self, fmt, *args):  # suppress default logging
         _logger.debug("HTTP %s %s", self.command, self.path)
+
+    # ------------------------------------------------------------------
+    # Auth helpers
+    # ------------------------------------------------------------------
+
+    def _is_auth_required(self) -> bool:
+        cfg = self.__class__._server_config
+        return cfg is not None and cfg.auth_enabled
+
+    def _is_authorised(self) -> bool:
+        """Return True if the request carries a valid Bearer token."""
+        cfg = self.__class__._server_config
+        if cfg is None or not cfg.auth_enabled:
+            return True
+        expected = cfg.api_token
+        if not expected:
+            # auth_enabled but no token configured — refuse all requests
+            return False
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[len("Bearer "):].strip() == expected
+        return False
+
+    def _check_auth(self) -> bool:
+        """Send 401 if auth fails.  Returns True if request may proceed."""
+        if not self._is_authorised():
+            self._send_json(401, {"error": "Unauthorised — provide a valid Bearer token"})
+            return False
+        return True
+
+    # ------------------------------------------------------------------
+    # Response helpers
+    # ------------------------------------------------------------------
 
     def _send_json(self, code: int, data: dict) -> None:
         body = json.dumps(data, default=str).encode()
@@ -315,8 +363,8 @@ class _AURaHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def do_GET(self):
@@ -324,10 +372,15 @@ class _AURaHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         aios = self.__class__.aios
 
+        # /health is always public
         if path in ("/health", "/"):
             self._send_json(200, {"status": "ok", "service": "AURa Virtual Server", "time": utcnow()})
+            return
 
-        elif path == "/dashboard":
+        if not self._check_auth():
+            return
+
+        if path == "/dashboard":
             self._send_html(_DASHBOARD_HTML)
 
         elif path == "/api/v1/status":
@@ -348,6 +401,43 @@ class _AURaHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/tasks":
             self._send_json(200, {"tasks": aios.cpu.list_tasks() if aios else []})
 
+        elif path.startswith("/api/v1/tasks/"):
+            task_id = path[len("/api/v1/tasks/"):]
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            task = aios.cpu.get_task(task_id)
+            if task is None:
+                self._send_json(404, {"error": f"Task '{task_id}' not found"})
+            else:
+                self._send_json(200, task)
+
+        elif path == "/api/v1/ask/stream":
+            # Server-Sent Events streaming endpoint
+            prompt = parse_qs(parsed.query).get("prompt", [""])[0].strip()
+            if not prompt:
+                self._send_json(400, {"error": "prompt query parameter required"})
+                return
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                for chunk in aios.ai_engine.stream(prompt):
+                    # SSE format: "data: <payload>\n\n"
+                    data = json.dumps({"token": chunk}, default=str)
+                    self.wfile.write(f"data: {data}\n\n".encode())
+                    self.wfile.flush()
+                # Signal end of stream
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # client disconnected
+
         else:
             self._send_json(404, {"error": "Not found", "path": path})
 
@@ -355,6 +445,10 @@ class _AURaHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         aios = self.__class__.aios
+
+        if not self._check_auth():
+            return
+
         body = self._read_json_body()
 
         if path == "/api/v1/ask":
@@ -393,6 +487,62 @@ class _AURaHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(503, {"error": "AI OS not ready"})
 
+        elif path == "/api/v1/cloud/nodes":
+            # Add a new virtual cloud node
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            try:
+                vcpus = int(body.get("vcpus", 8))
+                memory_gb = float(body.get("memory_gb", 32.0))
+            except (TypeError, ValueError):
+                self._send_json(400, {"error": "vcpus must be int, memory_gb must be float"})
+                return
+            node = aios.cloud.add_node(vcpus=vcpus, memory_gb=memory_gb)
+            self._send_json(201, node)
+
+        elif path == "/api/v1/plan":
+            task_desc = body.get("task", "")
+            if not task_desc:
+                self._send_json(400, {"error": "task field required"})
+                return
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            resp = aios.ai_engine.plan_task(task_desc)
+            self._send_json(200, {"plan": resp.text, "model": resp.model})
+
+        elif path == "/api/v1/analyse":
+            # Use provided metrics dict or fall back to live system metrics
+            metrics = body.get("metrics") or (aios.metrics() if aios else {})
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            resp = aios.ai_engine.analyse_metrics(metrics)
+            self._send_json(200, {"analysis": resp.text, "model": resp.model})
+
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        aios = self.__class__.aios
+
+        if not self._check_auth():
+            return
+
+        if path.startswith("/api/v1/cloud/nodes/"):
+            node_id = path[len("/api/v1/cloud/nodes/"):]
+            if not aios:
+                self._send_json(503, {"error": "AI OS not ready"})
+                return
+            removed = aios.cloud.remove_node(node_id)
+            if removed:
+                self._send_json(200, {"removed": node_id})
+            else:
+                self._send_json(404, {"error": f"Node '{node_id}' not found"})
+
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -417,6 +567,7 @@ class VirtualServer:
 
     def start(self, aios: "AIOS") -> None:
         _AURaHandler.aios = aios
+        _AURaHandler._server_config = self._config
         self._httpd = HTTPServer((self._config.host, self._config.port), _AURaHandler)
         self._thread = threading.Thread(
             target=self._httpd.serve_forever,

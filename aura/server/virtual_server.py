@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 
 _logger = get_logger("aura.server")
 
+# Sentinel sent as the final SSE event to signal end-of-stream.
+# Shared between the server-side handler and the dashboard JavaScript.
+_SSE_DONE_SENTINEL = "[DONE]"
+
 # ---------------------------------------------------------------------------
 # HTML dashboard template (single-page, no external dependencies)
 # ---------------------------------------------------------------------------
@@ -252,7 +256,7 @@ _DASHBOARD_HTML = """\
       const url = '/api/v1/ask/stream?prompt=' + encodeURIComponent(msg);
       const es = new EventSource(url);
       es.onmessage = function(e) {
-        if (e.data === '[DONE]') { es.close(); respSpan.removeAttribute('id'); return; }
+        if (e.data === '[DONE]') { /* matches _SSE_DONE_SENTINEL in virtual_server.py */ es.close(); respSpan.removeAttribute('id'); return; }
         try {
           const d = JSON.parse(e.data);
           respSpan.textContent += (d.token || '');
@@ -325,7 +329,7 @@ class _AURaHandler(BaseHTTPRequestHandler):
     def _check_auth(self) -> bool:
         """Send 401 if auth fails.  Returns True if request may proceed."""
         if not self._is_authorised():
-            self._send_json(401, {"error": "Unauthorised — provide a valid Bearer token"})
+            self._send_json(401, {"error": "Unauthorized — provide a valid Bearer token"})
             return False
         return True
 
@@ -433,7 +437,7 @@ class _AURaHandler(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {data}\n\n".encode())
                     self.wfile.flush()
                 # Signal end of stream
-                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.write(f"data: {_SSE_DONE_SENTINEL}\n\n".encode())
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # client disconnected

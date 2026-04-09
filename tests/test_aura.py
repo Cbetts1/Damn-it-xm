@@ -790,8 +790,12 @@ def test_api_tasks_by_id():
             resp = json.loads(r.read())
         task_id = resp["task_id"]
 
-        # Wait briefly for the task to finish
-        time.sleep(0.5)
+        # Wait briefly for the task to finish (poll instead of fixed sleep)
+        for _ in range(50):
+            t = aios.cpu.get_task(task_id)
+            if t and t["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.1)
 
         with urllib.request.urlopen(
             f"http://127.0.0.1:18447/api/v1/tasks/{task_id}", timeout=5

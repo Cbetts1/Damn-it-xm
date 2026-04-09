@@ -158,12 +158,18 @@ class BuiltinBackend(BaseBackend):
         )
 
     def stream(self, prompt: str, system_prompt: str = "", **kwargs) -> Generator[str, None, None]:
-        """Yield the response word-by-word with a small delay to simulate streaming."""
+        """Yield the response token-by-token with a small delay to simulate streaming.
+
+        Uses a regex tokeniser so that original whitespace (including newlines and
+        multiple consecutive spaces) is preserved exactly.
+        """
+        import re as _re
         text = self._build_response_text(prompt)
-        words = text.split(" ")
-        for i, word in enumerate(words):
-            # Re-attach the space that split() removed (except before the last word)
-            yield word if i == len(words) - 1 else word + " "
+        # Split into alternating non-whitespace/whitespace tokens, preserving both
+        tokens = _re.split(r"(\s+)", text)
+        for token in tokens:
+            if token:  # skip empty strings from edge-case splits
+                yield token
             if self.STREAM_TOKEN_DELAY > 0:
                 time.sleep(self.STREAM_TOKEN_DELAY)
 

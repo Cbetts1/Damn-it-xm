@@ -71,6 +71,7 @@ class AURaConfig:
     version: str = "1.0.0"
     log_level: str = "INFO"
     data_dir: str = os.path.join(os.path.expanduser("~"), ".aura")
+    persistence_db: str = ""  # overridden to data_dir/aura.db in from_env if empty
 
     cloud: CloudConfig = field(default_factory=CloudConfig)
     cpu: CPUConfig = field(default_factory=CPUConfig)
@@ -84,6 +85,9 @@ class AURaConfig:
         config = cls()
         config.log_level = os.getenv("AURA_LOG_LEVEL", config.log_level)
         config.data_dir = os.getenv("AURA_DATA_DIR", config.data_dir)
+        if not config.persistence_db:
+            config.persistence_db = os.path.join(config.data_dir, "aura.db")
+        config.persistence_db = os.getenv("AURA_DB_PATH", config.persistence_db)
         config.ai_engine.backend = os.getenv("AURA_AI_BACKEND", config.ai_engine.backend)
         config.ai_engine.model_name = os.getenv("AURA_MODEL_NAME", config.ai_engine.model_name)
         config.ai_engine.device = os.getenv("AURA_DEVICE", config.ai_engine.device)

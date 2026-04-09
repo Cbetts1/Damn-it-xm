@@ -433,3 +433,191 @@ def test_aios_metrics_structure():
         assert "cpu" in m
         assert "server" in m
         assert m["version"] == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Persistence Engine tests
+# ---------------------------------------------------------------------------
+
+def test_persistence_set_get():
+    import tempfile, os
+    from aura.persistence.store import PersistenceEngine
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "test.db")
+        pe = PersistenceEngine(db_path)
+        pe.set("myns", "foo", "bar")
+        assert pe.get("myns", "foo") == "bar"
+        assert pe.get("myns", "missing", "default") == "default"
+        pe.close()
+
+
+def test_persistence_delete():
+    import tempfile, os
+    from aura.persistence.store import PersistenceEngine
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "test.db")
+        pe = PersistenceEngine(db_path)
+        pe.set("ns", "k", "v")
+        pe.delete("ns", "k")
+        assert pe.get("ns", "k") is None
+        pe.close()
+
+
+def test_persistence_list_keys():
+    import tempfile, os
+    from aura.persistence.store import PersistenceEngine
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "test.db")
+        pe = PersistenceEngine(db_path)
+        pe.set("space", "a", "1")
+        pe.set("space", "b", "2")
+        keys = pe.list_keys("space")
+        assert set(keys) == {"a", "b"}
+        ns = pe.list_namespaces()
+        assert "space" in ns
+        pe.close()
+
+
+def test_persistence_metrics():
+    import tempfile, os
+    from aura.persistence.store import PersistenceEngine
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "test.db")
+        pe = PersistenceEngine(db_path)
+        pe.set("alpha", "x", "hello")
+        pe.set("alpha", "y", "world")
+        pe.set("beta", "z", "test")
+        m = pe.metrics()
+        assert m["namespace_count"] == 2
+        assert m["total_keys"] == 3
+        assert "storage_bytes" in m
+        pe.close()
+
+
+# ---------------------------------------------------------------------------
+# Platform capability tests
+# ---------------------------------------------------------------------------
+
+def test_detect_capabilities():
+    from aura.adapters.android_bridge import detect_capabilities, PlatformCapabilities
+    caps = detect_capabilities()
+    assert isinstance(caps, PlatformCapabilities)
+    assert caps.arch != ""
+    # At least one of linux/windows/android must be true in any real environment
+    assert isinstance(caps.is_linux, bool)
+    assert isinstance(caps.has_python, bool)
+    assert caps.has_python is True  # we're running Python right now
+
+
+def test_android_bridge_info():
+    from aura.adapters.android_bridge import detect_capabilities, AndroidBridge
+    caps = detect_capabilities()
+    bridge = AndroidBridge(caps)
+    info = bridge.info()
+    assert "Platform Capabilities" in info
+    assert caps.arch in info
+    # run_command should work
+    rc, out, err = bridge.run_command("echo hello", timeout=5)
+    assert rc == 0
+    assert "hello" in out
+
+
+# ---------------------------------------------------------------------------
+# Shell command executor tests
+# ---------------------------------------------------------------------------
+
+def test_shell_executor_pwd():
+    from aura.shell.commands import ShellCommandExecutor
+    ex = ShellCommandExecutor()
+    result = ex.execute("pwd")
+    assert result == ex.cwd
+
+
+def test_shell_executor_cd():
+    import os, tempfile
+    from aura.shell.commands import ShellCommandExecutor
+    with tempfile.TemporaryDirectory() as d:
+        ex = ShellCommandExecutor(cwd=d)
+        ex.execute("mkdir subdir")
+        ex.execute("cd subdir")
+        assert ex.cwd == os.path.join(d, "subdir")
+
+
+def test_shell_executor_ls():
+    import os, tempfile
+    from aura.shell.commands import ShellCommandExecutor
+    with tempfile.TemporaryDirectory() as d:
+        open(os.path.join(d, "file.txt"), "w").close()
+        ex = ShellCommandExecutor(cwd=d)
+        result = ex.execute("ls")
+        assert "file.txt" in result
+
+
+def test_shell_executor_echo():
+    from aura.shell.commands import ShellCommandExecutor
+    ex = ShellCommandExecutor()
+    result = ex.execute("echo hello world")
+    assert "hello world" in result
+
+
+def test_shell_executor_history():
+    from aura.shell.commands import ShellCommandExecutor
+    ex = ShellCommandExecutor()
+    ex.execute("echo one")
+    ex.execute("echo two")
+    hist = ex.get_history()
+    assert "echo one" in hist
+    assert "echo two" in hist
+    result = ex.execute("history")
+    assert "echo one" in result
+
+
+# ---------------------------------------------------------------------------
+# Plugin manager tests
+# ---------------------------------------------------------------------------
+
+def test_plugin_manager_register():
+    from aura.plugins.manager import PluginManager, SystemInfoPlugin
+    pm = PluginManager()
+    pm.register(SystemInfoPlugin())
+    assert pm.get("system-info") is not None
+    pm.unregister("system-info")
+    assert pm.get("system-info") is None
+
+
+def test_plugin_manager_dispatch():
+    from aura.plugins.manager import PluginManager, SystemInfoPlugin
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+
+    pm = PluginManager()
+    pm.register(SystemInfoPlugin())
+
+    cfg = AURaConfig()
+    cfg.server.port = 18450
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+
+    with AIOS(cfg) as aios:
+        result = pm.dispatch("sysinfo", [], aios)
+        assert result is not None
+        assert "Python" in result
+        none_result = pm.dispatch("unknowncmd", [], aios)
+        assert none_result is None
+
+
+def test_plugin_manager_list():
+    from aura.plugins.manager import PluginManager
+    pm = PluginManager()
+    pm.load_builtin_plugins()
+    plugins = pm.list_plugins()
+    assert isinstance(plugins, list)
+    assert len(plugins) >= 2
+    names = [p["name"] for p in plugins]
+    assert "system-info" in names
+    assert "storage" in names
+    for p in plugins:
+        assert "name" in p
+        assert "version" in p
+        assert "description" in p
+        assert "commands" in p

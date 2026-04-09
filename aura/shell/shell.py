@@ -25,6 +25,7 @@ import textwrap
 from typing import List, Optional, TYPE_CHECKING
 
 from aura.utils import get_logger
+from aura.shell.commands import ShellCommandExecutor, MenuWorkspace
 
 if TYPE_CHECKING:
     from aura.os_core.ai_os import AIOS
@@ -61,6 +62,8 @@ _SHELL_COMMANDS = [
     "status", "metrics", "cloud", "cpu", "server", "nodes",
     "models", "tasks", "ask", "plan", "analyse", "history",
     "clear_history", "version", "help", "exit", "quit", "clear",
+    "bash", "menu", "store", "retrieve", "platform", "plugins",
+    "sysinfo",
 ]
 
 
@@ -85,11 +88,16 @@ class AURaShell:
     Provides a full-featured command environment for operating the AI OS.
     """
 
-    PROMPT = f"{_BOLD}{_CYAN}AURa{_RESET}{_DIM}>{_RESET} "
+    @property
+    def PROMPT(self) -> str:  # type: ignore[override]
+        cwd = getattr(self._executor, "cwd", "~")
+        short = cwd.replace(os.path.expanduser("~"), "~")
+        return f"{_BOLD}{_CYAN}AURa{_RESET}{_DIM}:{short}>{_RESET} "
 
     def __init__(self, aios: "AIOS") -> None:
         self._aios = aios
         self._logger = get_logger("aura.shell")
+        self._executor = ShellCommandExecutor()
         self._setup_readline()
 
     def _setup_readline(self) -> None:
@@ -127,10 +135,18 @@ class AURaShell:
         if not line:
             return True
 
+        # '!' prefix — run directly via ShellCommandExecutor
+        if line.startswith("!"):
+            output = self._executor.execute(line[1:].strip())
+            if output:
+                self._print(output)
+            return True
+
         # Split into command + args
         parts = line.split(None, 1)
         cmd = parts[0].lower()
         rest = parts[1].split() if len(parts) > 1 else []
+        rest_raw = parts[1] if len(parts) > 1 else ""
 
         if cmd in ("exit", "quit"):
             print(f"{_DIM}Goodbye.{_RESET}")
@@ -138,6 +154,16 @@ class AURaShell:
 
         if cmd == "clear":
             print("\033[2J\033[H", end="")
+            return True
+
+        if cmd == "bash":
+            output = self._executor.execute(rest_raw)
+            if output:
+                self._print(output)
+            return True
+
+        if cmd == "menu":
+            MenuWorkspace(self._aios).run()
             return True
 
         try:

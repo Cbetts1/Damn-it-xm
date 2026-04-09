@@ -28,6 +28,9 @@ from aura.ai_engine.engine import AIEngine
 from aura.cloud.virtual_cloud import VirtualCloud
 from aura.cpu.virtual_cpu import VirtualCPU, TaskPriority
 from aura.server.virtual_server import VirtualServer
+from aura.persistence.store import PersistenceEngine
+from aura.adapters.android_bridge import AndroidBridge, detect_capabilities, PlatformCapabilities
+from aura.plugins.manager import PluginManager
 
 _logger = get_logger("aura.os")
 
@@ -55,6 +58,10 @@ class AIOS:
         self._cloud: Optional[VirtualCloud] = None
         self._cpu: Optional[VirtualCPU] = None
         self._server: Optional[VirtualServer] = None
+        self._persistence: Optional[PersistenceEngine] = None
+        self._capabilities: Optional[PlatformCapabilities] = None
+        self._android_bridge: Optional[AndroidBridge] = None
+        self._plugin_manager: Optional[PluginManager] = None
 
         # OS-level command registry
         self._commands: Dict[str, Callable] = {}
@@ -85,6 +92,22 @@ class AIOS:
     def server(self) -> VirtualServer:
         assert self._server is not None, "AIOS not started"
         return self._server
+
+    @property
+    def persistence(self) -> Optional[PersistenceEngine]:
+        return self._persistence
+
+    @property
+    def capabilities(self) -> Optional[PlatformCapabilities]:
+        return self._capabilities
+
+    @property
+    def android_bridge(self) -> Optional[AndroidBridge]:
+        return self._android_bridge
+
+    @property
+    def plugin_manager(self) -> Optional[PluginManager]:
+        return self._plugin_manager
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -125,6 +148,38 @@ class AIOS:
             backend=self._config.ai_engine.backend,
         )
 
+        # 5. Platform capabilities detection
+        self._logger.info("[5/6] Detecting platform capabilities…")
+        try:
+            self._capabilities = detect_capabilities()
+            self._logger.info(
+                "Platform: android=%s termux=%s linux=%s arch=%s",
+                self._capabilities.is_android,
+                self._capabilities.is_termux,
+                self._capabilities.is_linux,
+                self._capabilities.arch,
+            )
+            if self._capabilities.is_android or self._capabilities.is_termux:
+                self._android_bridge = AndroidBridge(self._capabilities)
+                self._logger.info("AndroidBridge initialised.")
+        except Exception as exc:
+            self._logger.warning("Platform detection failed: %s", exc)
+
+        # 6. Persistence engine + Plugin manager
+        self._logger.info("[6/6] Initialising Persistence Engine…")
+        try:
+            import os as _os
+            _os.makedirs(_os.path.dirname(self._config.persistence_db) or ".", exist_ok=True)
+            self._persistence = PersistenceEngine(self._config.persistence_db)
+        except Exception as exc:
+            self._logger.warning("PersistenceEngine init failed: %s", exc)
+
+        try:
+            self._plugin_manager = PluginManager()
+            self._plugin_manager.load_builtin_plugins()
+        except Exception as exc:
+            self._logger.warning("PluginManager init failed: %s", exc)
+
         self._start_time = time.monotonic()
         self._running = True
 
@@ -163,7 +218,7 @@ class AIOS:
     def status(self) -> dict:
         """High-level system status snapshot."""
         uptime = (time.monotonic() - self._start_time) if self._start_time else 0
-        return {
+        result = {
             "system": "AURa",
             "version": self.VERSION,
             "running": self._running,
@@ -176,8 +231,18 @@ class AIOS:
                 "virtual_cloud": "online" if self._cloud else "offline",
                 "virtual_cpu": "running" if (self._cpu and self._cpu._running) else "stopped",
                 "virtual_server": "running" if (self._server and self._server._thread and self._server._thread.is_alive()) else "stopped",
+                "persistence": "online" if self._persistence else "offline",
+                "plugin_manager": f"{len(self._plugin_manager._plugins)} plugins" if self._plugin_manager else "offline",
             },
         }
+        if self._capabilities:
+            result["platform"] = {
+                "android": self._capabilities.is_android,
+                "termux": self._capabilities.is_termux,
+                "linux": self._capabilities.is_linux,
+                "arch": self._capabilities.arch,
+            }
+        return result
 
     def metrics(self) -> dict:
         """Detailed metrics for all components (consumed by the Command Center)."""
@@ -339,12 +404,90 @@ class AIOS:
                 "  analyse       — AI analysis of current metrics\n"
                 "  history       — show conversation history\n"
                 "  clear_history — clear conversation history\n"
+                "  bash <cmd>    — execute a shell command\n"
+                "  store <ns> <key> <value> — persist a value\n"
+                "  retrieve <ns> <key>      — retrieve a value\n"
+                "  platform      — show platform capabilities\n"
+                "  plugins       — list loaded plugins\n"
+                "  menu          — show the text menu\n"
                 "  version       — show AURa version\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
 
+        elif cmd == "bash":
+            from aura.shell.commands import ShellCommandExecutor
+            executor = ShellCommandExecutor()
+            shell_cmd = " ".join(args)
+            if not shell_cmd:
+                return "Usage: bash <command>"
+            return executor.execute(shell_cmd)
+
+        elif cmd == "store":
+            if len(args) < 3:
+                return "Usage: store <namespace> <key> <value>"
+            if self._persistence is None:
+                return "Persistence engine not available."
+            ns, key, value = args[0], args[1], " ".join(args[2:])
+            try:
+                self._persistence.set(ns, key, value)
+                return f"Stored [{ns}] {key} = {value}"
+            except Exception as exc:
+                return f"store error: {exc}"
+
+        elif cmd == "retrieve":
+            if len(args) < 2:
+                return "Usage: retrieve <namespace> <key>"
+            if self._persistence is None:
+                return "Persistence engine not available."
+            ns, key = args[0], args[1]
+            val = self._persistence.get(ns, key)
+            if val is None:
+                return f"Key '{key}' not found in namespace '{ns}'."
+            return f"[{ns}] {key} = {val}"
+
+        elif cmd == "platform":
+            if self._capabilities is None:
+                return "Platform capabilities not yet detected."
+            if self._android_bridge:
+                return self._android_bridge.info()
+            c = self._capabilities
+            lines = [
+                "── Platform Capabilities ────────────────────",
+                f"  Android : {c.is_android}",
+                f"  Termux  : {c.is_termux}",
+                f"  Linux   : {c.is_linux}",
+                f"  Windows : {c.is_windows}",
+                f"  Arch    : {c.arch}",
+                f"  Release : {c.os_release}",
+                f"  bash={c.has_bash}  git={c.has_git}  curl={c.has_curl}",
+                f"  ssh={c.has_ssh}  pkg={c.has_pkg}  apt={c.has_apt}  pip={c.has_pip}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "plugins":
+            if self._plugin_manager is None:
+                return "Plugin manager not available."
+            plugins = self._plugin_manager.list_plugins()
+            if not plugins:
+                return "No plugins loaded."
+            lines = [f"Loaded plugins ({len(plugins)}):"]
+            for p in plugins:
+                cmds = ", ".join(p["commands"].keys())
+                lines.append(f"  • {p['name']} v{p['version']} — {p['description']}")
+                lines.append(f"    Commands: {cmds}")
+            return "\n".join(lines)
+
+        elif cmd == "menu":
+            from aura.shell.commands import MenuWorkspace
+            return MenuWorkspace(self).render_menu()
+
         else:
+            # Check plugin manager before falling back to AI
+            if self._plugin_manager:
+                plugin_result = self._plugin_manager.dispatch(cmd, args, self)
+                if plugin_result is not None:
+                    return plugin_result
             # Unknown command → route to AI engine
             resp = self.ai_engine.ask(command + (" " + " ".join(args) if args else ""))
             return resp.text

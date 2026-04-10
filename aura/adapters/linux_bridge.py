@@ -28,7 +28,7 @@ class LinuxBridge:
     def get_kernel_version(self) -> str:
         """Return the kernel version string, or a virtual fallback."""
         try:
-            with open("/proc/version", "r") as fh:
+            with open("/proc/version", "r", encoding="utf-8") as fh:
                 return fh.readline().strip()
         except OSError:
             return "AURa-Linux-Virtual"

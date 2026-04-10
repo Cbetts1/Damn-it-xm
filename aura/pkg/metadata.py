@@ -14,6 +14,7 @@ class PackageStatus(Enum):
     INSTALLED = "installed"
     UPGRADABLE = "upgradable"
     BROKEN = "broken"
+    NOT_FOUND = "not_found"
 
 
 @dataclass

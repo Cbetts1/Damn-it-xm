@@ -77,4 +77,4 @@ class PackageInstaller:
                 return self._installed[name]["status"]
         if self._registry.get(name) is not None:
             return PackageStatus.AVAILABLE.value
-        return PackageStatus.BROKEN.value
+        return PackageStatus.NOT_FOUND.value

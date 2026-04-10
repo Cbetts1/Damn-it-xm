@@ -1,12 +1,12 @@
-# AURa — AI Universal Resource Os thats vitural.
+# AURa — Autonomous Universal Resource Architecture
 
-> **AI-first virtual system** ·
+> **AI-first virtual operating system** · v2.0.0
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-yellow?style=flat-square)](https://www.python.org)
 [![Termux](https://img.shields.io/badge/Termux-compatible-orange?style=flat-square)](https://termux.dev)
-[![Tests](https://img.shields.io/badge/tests-98%20passed-brightgreen?style=flat-square)](tests/test_aura.py)
+[![Tests](https://img.shields.io/badge/tests-337%20passed-brightgreen?style=flat-square)](tests/test_aura.py)
 
 ![AURa Command Center Dashboard](https://github.com/user-attachments/assets/32a944d2-8ac8-4b53-8c10-eddc05c0de3d)
 
@@ -36,51 +36,84 @@ and cloud power on demand, all governed by a single AI brain.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       AURa AI OS                            │
-│         (the only physical component — the brain)           │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐ │
-│  │ Virtual      │  │ Virtual CPU  │  │ Virtual Server    │ │
-│  │ Cloud        │  │ 64 vCores    │  │ REST API          │ │
-│  │ 8 nodes      │  │ 4.2 GHz      │  │ Web Dashboard     │ │
-│  │ 1 TB storage │  │ Task queue   │  │ /dashboard        │ │
-│  │ Model cache  │  │ 256 threads  │  │ /api/v1/*         │ │
-│  └──────────────┘  └──────────────┘  └───────────────────┘ │
-│                                                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  AI Engine  (pluggable — all free & open-source)      │  │
-│  │  • builtin       : zero deps, works 100% offline      │  │
-│  │  • transformers  : any Hugging Face model             │  │
-│  │  • openai_compat : Ollama, LM Studio, text-gen-webui  │  │
-│  └───────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-         ▲                                ▲
-         │                                │
-  AURa Shell (CLI REPL)      Command Center (Web + TUI)
+┌─────────────────────────────────────────────────────────────────┐
+│                        AURa AI OS  v2.0.0                       │
+│           (the only physical component — the brain)             │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐   │
+│  │ Virtual      │  │ Virtual CPU  │  │ Virtual Server      │   │
+│  │ Cloud        │  │ 64 vCores    │  │ REST API            │   │
+│  │ 8 nodes      │  │ 4.2 GHz      │  │ Web Dashboard       │   │
+│  │ 1 TB storage │  │ Task queue   │  │ /dashboard          │   │
+│  │ Model cache  │  │ 256 threads  │  │ /api/v1/*           │   │
+│  └──────────────┘  └──────────────┘  └─────────────────────┘   │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  AI Engine  (pluggable — all free & open-source)        │    │
+│  │  • builtin       : zero deps, works 100% offline        │    │
+│  │  • transformers  : any Hugging Face model               │    │
+│  │  • openai_compat : Ollama, LM Studio, text-gen-webui    │    │
+│  │  • Cloud AI Router: routes llama3.1:8b via VirtualCPU   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  ┌────────────────────┐  ┌──────────────────────────────────┐   │
+│  │ Kernel Services    │  │ Filesystem Layer                 │   │
+│  │ ProcessManager     │  │ VirtualFileSystem (VFS)          │   │
+│  │ IPCBus             │  │ ProcFS (/proc/aura/*)            │   │
+│  │ SyslogService      │  │ FHSMapper                        │   │
+│  │ SecretsManager     │  └──────────────────────────────────┘   │
+│  │ CronService        │  ┌──────────────────────────────────┐   │
+│  │ ServiceManager     │  │ Identity & Governance            │   │
+│  └────────────────────┘  │ CryptoIdentityEngine             │   │
+│  ┌────────────────────┐  │ IdentityRegistry                 │   │
+│  │ Hardware /dev/*    │  │ AuditLog                         │   │
+│  │ /dev/vcpu  /vram   │  └──────────────────────────────────┘   │
+│  │ /dev/vdisk /vnet   │  ┌──────────────────────────────────┐   │
+│  │ /dev/vbt   /vgpu   │  │ Package Manager                  │   │
+│  └────────────────────┘  │ PackageRegistry + Installer      │   │
+│  ┌────────────────────┐  └──────────────────────────────────┘   │
+│  │ ROOT Sovereign     │  ┌──────────────────────────────────┐   │
+│  │ DeviceManager      │  │ Web/Remote Layer                 │   │
+│  │ HOME Userland      │  │ WebAPI + WebSocketHub            │   │
+│  │ BuildPipeline      │  └──────────────────────────────────┘   │
+│  └────────────────────┘                                         │
+└─────────────────────────────────────────────────────────────────┘
+          ▲                                 ▲
+          │                                 │
+   AURa Shell (CLI REPL)       Command Center (Web + TUI)
 ```
 
 | Component | Description |
 |---|---|
-| **AI OS** | Central orchestrator; boots and manages all virtual components |
+| **AI OS** | Central orchestrator; boots all virtual components in order |
 | **Virtual Cloud** | Distributed compute nodes, storage volumes, model registry |
 | **Virtual CPU** | Priority task scheduler backed by a thread pool |
 | **Virtual Server** | HTTP API + auto-refreshing web dashboard |
 | **AI Engine** | Pluggable inference: builtin → Transformers → OpenAI-compatible |
+| **Cloud AI Router** | Routes llama3.1:8b inference through VirtualCPU + VirtualCloud |
 | **Command Center** | Web dashboard (`/dashboard`) + TUI live monitor |
 | **Shell** | Interactive REPL with tab-completion and readline history |
+| **Kernel Services** | ProcessManager, IPCBus, SyslogService, SecretsManager, CronService, ServiceManager |
+| **Filesystem Layer** | VirtualFileSystem (VFS), ProcFS, FHSMapper |
+| **Hardware /dev/*** | Virtual devices: vcpu, vram, vdisk, vnet, vbt, vgpu — managed by DeviceManager |
+| **ROOT Sovereign** | Deny-by-default firewall; approval gateway for all device access |
+| **HOME Userland** | User-facing filesystem and process environment |
+| **Build Pipeline** | Build → sign (HMAC-SHA256) → approve → deploy lifecycle |
+| **Identity & Governance** | CryptoIdentityEngine, IdentityRegistry, AuditLog |
+| **Package Manager** | PackageRegistry + PackageInstaller for drop-in extensions |
+| **Web/Remote Layer** | WebAPI + WebSocketHub for remote control |
 | **Persistence Engine** | SQLite-backed conversation and KV store |
 | **Plugin Manager** | Drop-in plugins that extend shell commands and API routes |
 | **Android Bridge** | Detects Termux/Android capabilities for cross-platform support |
 
 ---
 
-## ✅ Validation Report — v1.2.0
+## ✅ Validation Report — v2.0.0
 
-**Tested on:** Python 3.12.3 · Linux · 2026-04-09
+**Tested on:** Python 3.12.3 · Linux · 2026-04-10
 
 ```
-98 tests PASSED in 17.3 s
+337 tests PASSED
 ```
 
 | Test Area | Tests | Result |
@@ -98,6 +131,15 @@ and cloud power on demand, all governed by a single AI brain.
 | Menu / Workspace rendering | 2 | ✅ PASS |
 | Shell executor (pwd, echo, cd, ls, cat, wc, …) | 14 | ✅ PASS |
 | Android/Termux bridge (platform detection) | 31 | ✅ PASS |
+| ROOT sovereign layer | — | ✅ PASS |
+| Hardware /dev/* devices | — | ✅ PASS |
+| Kernel services (process, ipc, syslog, cron, …) | — | ✅ PASS |
+| Filesystem layer (VFS, ProcFS, FHS) | — | ✅ PASS |
+| Package manager (registry + installer) | — | ✅ PASS |
+| Web/remote layer (WebAPI, WebSocket) | — | ✅ PASS |
+| Identity & governance (crypto, audit) | — | ✅ PASS |
+| Cloud AI Router (Ollama integration) | — | ✅ PASS |
+| Build pipeline (sign, approve, deploy) | — | ✅ PASS |
 
 Run validation yourself:
 
@@ -110,22 +152,28 @@ python -m pytest tests/test_aura.py -v
 
 ```
 $ python main.py status
-AURa v1.2.0  |  Uptime: 00h 00m 00s
+AURa v2.0.0  |  Uptime: 00h 00m 00s
   ✅  ai_os                  online
   ✅  ai_engine              ready
   ✅  virtual_cloud          online
   ✅  virtual_cpu            running
   ✅  virtual_server         running
+  ✅  root                   online
+  ✅  home                   mounted
+  ✅  dev_vnet               online
+  ✅  dev_vgpu               online
 
 $ python main.py ask "hello"
 Hello! I'm AURa, your AI OS. How can I assist you today?
 
 $ python main.py ask "status"
 All AURa virtual components are operational.
-  • AI OS     : Running
-  • Virtual Cloud : Online  (8 nodes)
-  • Virtual CPU   : Active  (64 vCores @ 4.2 GHz)
-  • Virtual Server: Serving (port 8000)
+  • AI OS          : Running
+  • Virtual Cloud  : Online  (8 nodes)
+  • Virtual CPU    : Active  (64 vCores @ 4.2 GHz)
+  • Virtual Server : Serving (port 8000)
+  • ROOT           : Online  (deny-by-default)
+  • Kernel         : Online  (6 services)
 ```
 
 ---
@@ -135,11 +183,11 @@ All AURa virtual components are operational.
 ### Linux / macOS / WSL
 
 ```bash
-git clone https://github.com/Cbetts1/Damn-it-xm
+git clone https://github.com/Cbetts1/Damn-it-xm.git
 cd Damn-it-xm
 
 # No external dependencies required
-python main.py shell          # interactive shell
+python main.py shell          # interactive shell (default)
 python main.py status         # one-shot status check
 python main.py ask "hello"    # talk to the AI engine
 python main.py server         # start API + web dashboard
@@ -168,7 +216,7 @@ AURa runs fully on Android via [Termux](https://termux.dev) — no root required
 # 1. Install Termux from F-Droid: https://f-droid.org/packages/com.termux/
 # 2. Open Termux and run:
 pkg update -y && pkg install -y python git
-git clone https://github.com/Cbetts1/Damn-it-xm
+git clone https://github.com/Cbetts1/Damn-it-xm.git
 cd Damn-it-xm
 bash upgrade.sh        # installs pytest & validates everything
 python main.py shell   # start the AURa shell
@@ -177,7 +225,7 @@ python main.py shell   # start the AURa shell
 **Termux one-liner (after installing python + git):**
 
 ```bash
-git clone https://github.com/Cbetts1/Damn-it-xm && cd Damn-it-xm && bash upgrade.sh
+git clone https://github.com/Cbetts1/Damn-it-xm.git && cd Damn-it-xm && bash upgrade.sh
 ```
 
 > **Note:** AURa uses only Python stdlib + optional lightweight extras — no
@@ -185,10 +233,10 @@ git clone https://github.com/Cbetts1/Damn-it-xm && cd Damn-it-xm && bash upgrade
 
 ---
 
-## 🔋 Capabilities (v1.2.0)
+## 🔋 Capabilities (v2.0.0)
 
 ### AI OS & Orchestration
-- Boots and manages all virtual components in order (AI Engine → Cloud → CPU → Server)
+- 9-stage boot sequence: kernel services → filesystem → package manager → web layer → AI enhancements → ROOT → AI Engine → Cloud → CPU → Server → hardware → HOME → build pipeline → services
 - Unified `dispatch()` command API used by the Shell and REST API
 - In-process `EventBus` — all subsystems publish and subscribe to events
 - Graceful `SIGINT`/`SIGTERM` shutdown of all threads
@@ -199,6 +247,9 @@ git clone https://github.com/Cbetts1/Damn-it-xm && cd Damn-it-xm && bash upgrade
 - **Built-in backend** — zero external dependencies; 100% offline; deterministic
 - **Hugging Face Transformers backend** — any open-source model (DialoGPT, Mistral 7B, …)
 - **OpenAI-compatible backend** — Ollama, LM Studio, text-generation-webui
+- **Cloud AI Router** — routes `llama3.1:8b` inference through VirtualCPU thread pool + VirtualCloud; keeps heavy model weights out of the main Python process
+- **Model Registry** — tracks AI model metadata across backends
+- **Personality Kernel** — configurable AI persona and response style
 - Conversation history tracking with bounded in-memory buffer (500 entries max)
 - `ask()` — free-form query; `plan_task()` — step-by-step plans; `analyse_metrics()` — AI recommendations
 
@@ -222,11 +273,52 @@ git clone https://github.com/Cbetts1/Damn-it-xm && cd Damn-it-xm && bash upgrade
 - Auto-refreshing single-page **web Command Center** at `/dashboard`
 - CORS headers on all responses
 
+### Kernel Services (v2.0.0)
+- **ProcessManager** — tracks virtual processes (spawn, list, kill)
+- **IPCBus** — inter-process communication between subsystems
+- **SyslogService** — rolling system log with timestamped entries
+- **SecretsManager** — encrypted in-memory secret store
+- **CronService** — recurring background job scheduler
+- **ServiceManager** — lifecycle management for core services
+
+### Filesystem Layer (v2.0.0)
+- **VirtualFileSystem** — POSIX-style mountable VFS with pluggable providers
+- **ProcFS** — `/proc/aura/*` dynamic entries (version, uptime, etc.)
+- **FHSMapper** — maps AURa virtual paths to Filesystem Hierarchy Standard layout
+
+### Hardware /dev/* (v2.0.0)
+- `/dev/vcpu` — virtual CPU device backed by VirtualCPU task scheduler
+- `/dev/vram` — 32 GB virtual RAM device with metrics
+- `/dev/vdisk` — virtual disk with file-backed storage
+- `/dev/vnet` — virtual network stack (DHCP, DNS, NAT, firewall)
+- `/dev/vbt` — virtual Bluetooth device
+- `/dev/vgpu` — compute dispatcher; spills to virtual cloud when local CPU > 80%
+- All devices registered through **DeviceManager** and gated by ROOT
+
+### ROOT Sovereign Layer (v2.0.0)
+- Deny-by-default firewall; every device access requires ROOT approval
+- Cryptographic approval tokens (HMAC-SHA256)
+- Governs HOME userland mount/unmount and all /dev/* claims
+- Configurable via `AURA_ROOT_SECRET`
+
+### Identity & Governance (v2.0.0)
+- **CryptoIdentityEngine** — issues signed identity tokens (NODE, USER, SERVICE kinds)
+- **IdentityRegistry** — tracks all issued identities with metadata
+- **AuditLog** — tamper-evident event log flushed to disk on shutdown
+
+### Package Manager (v2.0.0)
+- **PackageRegistry** — tracks available and installed packages with metadata
+- **PackageInstaller** — install, remove, and list packages; `git`-based install supported
+
+### Web/Remote Layer (v2.0.0)
+- **WebAPI** — lightweight REST API layer with optional token authentication
+- **WebSocketHub** — manages up to 64 concurrent WebSocket client connections
+
 ### Shell (REPL)
 - Full readline integration — arrow-key history across sessions
 - Tab-completion for all built-in commands
 - Colour prompt and ANSI-formatted output
-- `!<cmd>` shorthand to execute shell commands (pwd, ls, echo, cd, …)
+- `!<cmd>` shorthand to execute host shell commands (pwd, ls, echo, cd, …)
 - All unrecognised input routed to the AI engine automatically
 
 ### Persistence Engine
@@ -249,23 +341,84 @@ git clone https://github.com/Cbetts1/Damn-it-xm && cd Damn-it-xm && bash upgrade
 ## Shell Commands
 
 ```
+── Core ─────────────────────────────────────────────────────────
 status        — full system health (all components)
 metrics       — detailed live metrics (cloud + cpu + server)
-cloud         — virtual cloud status and node list
+cloud         — virtual cloud metrics (alias for metrics)
 cpu           — virtual CPU metrics and task stats
 server        — virtual server info and URLs
 nodes         — list all cloud compute nodes
 models        — list AI models registered in the cloud
 tasks         — list recent CPU task history
-ask <query>   — send a query directly to the AI engine
-plan <task>   — AI-generated step-by-step execution plan
-analyse       — AI analysis + recommendations for current metrics
-history       — show conversation history
-clear_history — clear conversation history
 version       — show AURa version
-help          — show this help
+help / ?      — show this help
 exit / quit   — exit the AURa shell
-! <cmd>       — run a shell command (ls, pwd, echo, cd, …)
+clear         — clear the terminal screen
+
+── AI ───────────────────────────────────────────────────────────
+ask <query>         — query the built-in AI engine
+cloud-ai status     — Cloud AI Router status (Ollama)
+cloud-ai ask <q>    — ask the large cloud AI model (llama3.1:8b)
+cloud-ai pull [m]   — download model to virtual cloud
+cloud-ai models     — list models in virtual cloud
+cloud-ai list       — list models on the Ollama server
+plan <task>         — AI-generated step-by-step execution plan
+analyse             — AI analysis + recommendations for current metrics
+history             — show conversation history
+clear_history       — clear conversation history
+personality         — AI personality kernel status
+modelreg            — AI model registry
+
+── System ───────────────────────────────────────────────────────
+platform      — detected platform capabilities (OS, Termux, arch, …)
+root          — ROOT sovereign layer status
+home          — HOME userland status
+banner        — show AURa boot banner
+
+── Hardware /dev/* ──────────────────────────────────────────────
+dev           — list all /dev/* virtual hardware devices
+net           — network stack status (DHCP / DNS / NAT / firewall)
+vgpu          — compute dispatcher (/dev/vgpu) status
+vram          — virtual RAM device status
+vdisk         — virtual disk device status
+
+── Kernel ───────────────────────────────────────────────────────
+kernel        — kernel services overview
+proc          — process manager status
+syslog        — system log viewer
+cron …        — cron job management (list / add / remove)
+svc …         — service manager (list / start / stop)
+
+── Filesystem ───────────────────────────────────────────────────
+fs …          — HOME filesystem (ls / mkdir / write / read / rm / info)
+vfs …         — virtual filesystem operations
+
+── Packages ─────────────────────────────────────────────────────
+pkg …         — package manager (list / install / remove / git)
+apkg …        — AURA package manager (registry / install / list)
+
+── Build & Deploy ───────────────────────────────────────────────
+build …       — build pipeline (run / list / approve / reject)
+git …         — git operations (clone / pull / status)
+
+── Identity & Governance ────────────────────────────────────────
+identity      — identity registry status
+audit         — recent audit log entries
+
+── Connectivity ─────────────────────────────────────────────────
+mirror        — mirror service status
+intel         — intelligence index summary
+
+── Utilities ────────────────────────────────────────────────────
+plugins       — list registered plugins
+kv …          — key-value persistence store
+              kv set <ns> <key> <val>
+              kv get <ns> <key>
+              kv del <ns> <key>
+              kv list <ns>
+              kv namespaces
+bash <cmd>    — run a host shell command
+! <cmd>       — shorthand for bash (e.g. !ls, !pwd)
 ```
 
 ---
@@ -300,6 +453,14 @@ exit / quit   — exit the AURa shell
 | `AURA_DASHBOARD_PORT` | `7860` | Command Center port |
 | `AURA_LOG_LEVEL` | `INFO` | Log level: DEBUG / INFO / WARNING / ERROR |
 | `AURA_DATA_DIR` | `~/.aura` | Data and model cache directory |
+| `AURA_API_TOKEN` | — | Token for Virtual Server API authentication |
+| `AURA_OLLAMA_URL` | `http://localhost:11434` | Ollama server base URL |
+| `AURA_OLLAMA_MODEL` | `llama3.1:8b` | Model name to use via Cloud AI Router |
+| `AURA_ROOT_SECRET` | *(change me)* | HMAC secret for ROOT approval tokens |
+| `AURA_BUILD_SECRET` | *(change me)* | HMAC secret for build artefact signing |
+| `AURA_COMPUTE_BACKEND` | `local` | Compute backend: `local` / `cloud` |
+| `AURA_HOME_DIR` | `~/.aura/home` | HOME userland base directory |
+| `AURA_BOOT_DEVICE` | — | SD-card / external storage path to boot HOME from |
 
 ### Connect a Free Open-Source Large Model
 
@@ -310,12 +471,20 @@ export AURA_AI_BACKEND=transformers
 export AURA_MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3
 python main.py shell
 
-# Option B — Ollama (run a local server, then point AURa at it)
+# Option B — Ollama (run a local server, then use the Cloud AI Router)
 # Install Ollama: https://ollama.ai
-ollama run mistral        # starts server on localhost:11434
+ollama serve                   # start the Ollama server (localhost:11434)
+ollama pull llama3.1:8b        # pull the default AURa cloud model
+# AURa auto-connects — just start:
+python main.py shell
+# Then in the shell:
+# cloud-ai status              # check Ollama connection
+# cloud-ai ask "hello"         # inference routed through VirtualCPU
+
+# Option C — Use any OpenAI-compatible server (LM Studio, text-gen-webui, etc.)
 export AURA_AI_BACKEND=openai_compatible
-export AURA_API_BASE_URL=http://localhost:11434/v1
-export AURA_MODEL_NAME=mistral
+export AURA_API_BASE_URL=http://localhost:1234/v1
+export AURA_MODEL_NAME=your-model-name
 python main.py shell
 ```
 
@@ -325,35 +494,91 @@ python main.py shell
 
 ```
 Damn-it-xm/
-├── main.py                        # Top-level entry point
+├── main.py                        # Top-level entry point (delegates to aura/main.py)
 ├── setup.py                       # pip-installable package definition
 ├── requirements.txt               # Optional dependency notes
-├── upgrade.sh                     # One-command Termux / Linux upgrade script
+├── upgrade.sh                     # One-command Termux / Linux upgrade & validation
 ├── LICENSE                        # MIT License
 ├── CHANGELOG.md                   # Version history
 ├── TERMS_OF_USE.md                # Terms of Use
 ├── PRIVACY_NOTICE.md              # Privacy Notice
 ├── DISCLAIMER.md                  # Warranty Disclaimer
+├── branding/
+│   ├── banner.py                  # Boot banner generator
+│   └── assets.py                  # Branding assets
 └── aura/
-    ├── __init__.py                # Package metadata (version 1.2.0)
+    ├── __init__.py                # Package metadata (version 2.0.0)
     ├── __main__.py                # python -m aura entry point
     ├── main.py                    # CLI dispatcher (shell/server/monitor/status/ask)
     ├── config.py                  # All configuration dataclasses + env loading
-    ├── utils/__init__.py          # Logging, IDs, formatting, EventBus
-    ├── ai_engine/engine.py        # AIEngine + backends (builtin/transformers/openai_compat)
-    ├── cloud/virtual_cloud.py     # VirtualCloud: nodes, volumes, model registry
+    ├── utils/                     # Logging, IDs, formatting, EventBus
+    ├── ai_engine/
+    │   ├── engine.py              # AIEngine + backends (builtin/transformers/openai_compat)
+    │   ├── model_registry.py      # AI model metadata registry
+    │   ├── personality_kernel.py  # AI persona and response style
+    │   ├── ollama_backend.py      # Ollama REST API backend
+    │   └── llama_backend.py       # LLaMA-family backend helpers
+    ├── cloud/
+    │   ├── virtual_cloud.py       # VirtualCloud: nodes, volumes, model registry
+    │   └── cloud_ai_router.py     # Routes inference through VirtualCPU + VirtualCloud
     ├── cpu/virtual_cpu.py         # VirtualCPU: priority task scheduler
     ├── server/virtual_server.py   # VirtualServer: HTTP API + web dashboard
     ├── os_core/ai_os.py           # AIOS: central orchestrator and bridge
+    ├── kernel/
+    │   ├── process_manager.py     # Virtual process lifecycle
+    │   ├── ipc.py                 # Inter-process communication bus
+    │   ├── syslog.py              # Rolling system log service
+    │   ├── secrets_manager.py     # In-memory encrypted secrets
+    │   ├── cron.py                # Recurring background job scheduler
+    │   └── service_manager.py     # Core service lifecycle manager
+    ├── fs/
+    │   ├── vfs.py                 # Virtual Filesystem (POSIX-style mounts)
+    │   ├── procfs.py              # /proc/aura/* dynamic entries
+    │   └── fhs.py                 # Filesystem Hierarchy Standard mapper
+    ├── pkg/
+    │   ├── registry.py            # Package registry
+    │   ├── installer.py           # Package installer (including git-based)
+    │   └── metadata.py            # Package metadata model
+    ├── web/
+    │   ├── api.py                 # Lightweight WebAPI with optional auth
+    │   └── ws.py                  # WebSocket hub (up to 64 clients)
+    ├── root/sovereign.py          # ROOT sovereign layer (deny-by-default)
+    ├── hardware/
+    │   ├── device_manager.py      # /dev/* device registry and ROOT gating
+    │   ├── vcpu.py                # /dev/vcpu — virtual CPU device
+    │   ├── vram.py                # /dev/vram — virtual RAM device
+    │   ├── vdisk.py               # /dev/vdisk — virtual disk device
+    │   ├── vnet.py                # /dev/vnet — virtual network device
+    │   ├── vbt.py                 # /dev/vbt  — virtual Bluetooth device
+    │   └── vgpu.py                # /dev/vgpu — compute dispatcher
+    ├── network/stack.py           # Virtual network stack (DHCP, DNS, NAT, FW)
+    ├── compute/dispatcher.py      # Compute backend abstraction
+    ├── boot/
+    │   ├── bootloader.py          # Boot state machine
+    │   └── aura_init.py           # PID-1 equivalent service manager
+    ├── home/userland.py           # HOME userland filesystem and processes
+    ├── build/
+    │   ├── pipeline.py            # Build → sign → approve → deploy lifecycle
+    │   └── signer.py              # HMAC-SHA256 artefact signing and verification
+    ├── identity/
+    │   ├── crypto.py              # CryptoIdentityEngine (signed tokens)
+    │   └── registry.py            # IdentityRegistry
+    ├── governance/audit.py        # AuditLog (tamper-evident event log)
+    ├── resources/intelligence_index.py  # Intelligence index store
+    ├── command_center/
+    │   ├── monitor.py             # TUI live monitor
+    │   └── mirror.py              # Mirror service
     ├── persistence/store.py       # SQLite persistence engine
     ├── plugins/manager.py         # Plugin manager
     ├── adapters/android_bridge.py # Termux / Android cross-platform bridge
-    ├── command_center/monitor.py  # TUI live monitor
-    └── shell/
-        ├── shell.py               # Interactive REPL
-        └── commands.py            # Built-in shell command executor
+    ├── shell/
+    │   ├── shell.py               # Interactive REPL
+    │   └── commands.py            # Built-in shell command executor
+    ├── scheduler/                 # Task scheduling utilities
+    ├── orchestration/             # Cross-component orchestration helpers
+    └── metrics/                   # Metrics aggregation helpers
 └── tests/
-    └── test_aura.py               # 98 tests covering all components
+    └── test_aura.py               # 337 tests covering all components
 ```
 
 ---
@@ -365,6 +590,7 @@ Damn-it-xm/
 | Virtual CPU cannot execute real compute kernels (GPU, WASM, etc.) | Year 2 |
 | Virtual Cloud does not replicate data across real network nodes | Year 2 |
 | Built-in AI backend answers are rule-based (not true generative AI) | Solved by switching backend |
+| Cloud AI Router requires a running Ollama server (not bundled) | Year 1 |
 | No user authentication on the web dashboard | Year 1 |
 | No multi-user or multi-tenant support | Year 2–3 |
 | No voice/speech interface | Year 3 |
@@ -450,7 +676,7 @@ By using AURa you agree to the [`TERMS_OF_USE.md`](TERMS_OF_USE.md).
 1. Fork the repository.
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Make your changes; add or update tests.
-4. Run `python -m pytest tests/test_aura.py -v` — all tests must pass.
+4. Run `python -m pytest tests/test_aura.py -v` — all 337 tests must pass.
 5. Open a pull request against `main`.
 
 All contributions are subject to the MIT License and the
@@ -464,4 +690,4 @@ See [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
 ---
 
-*AURa v1.2.0 · Free & Open Source · Built with ❤️ by the AURa Project*
+*AURa v2.0.0 · Free & Open Source · Built with ❤️ by the AURa Project*

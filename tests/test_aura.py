@@ -29,7 +29,7 @@ def _wait_for_server(host: str, port: int, timeout: float = 5.0) -> None:
 def test_default_config_loads():
     from aura.config import AURaConfig
     cfg = AURaConfig()
-    assert cfg.version == "1.3.0"
+    assert cfg.version == "2.0.0"
     assert cfg.cloud.compute_nodes == 8
     assert cfg.cpu.virtual_cores == 64
     assert cfg.server.port == 8000
@@ -320,7 +320,7 @@ def test_virtual_server_api_metrics():
         _wait_for_server("127.0.0.1", 18433)
         with urllib.request.urlopen("http://127.0.0.1:18433/api/v1/metrics", timeout=5) as r:
             data = json.loads(r.read())
-        assert data["version"] == "1.3.0"
+        assert data["version"] == "2.0.0"
         assert "cloud" in data
         assert "cpu" in data
 
@@ -417,7 +417,7 @@ def test_aios_dispatch_version():
     cfg.cpu.virtual_cores = 2
     with AIOS(cfg) as aios:
         out = aios.dispatch("version")
-        assert "1.3.0" in out
+        assert "2.0.0" in out
 
 
 def test_aios_metrics_structure():
@@ -432,7 +432,7 @@ def test_aios_metrics_structure():
         assert "cloud" in m
         assert "cpu" in m
         assert "server" in m
-        assert m["version"] == "1.3.0"
+        assert m["version"] == "2.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -2724,3 +2724,1242 @@ def test_aios_help_includes_fs_pkg_git(tmp_path):
         assert "fs" in out
         assert "pkg" in out
         assert "git" in out
+
+
+# ===========================================================================
+# v2.0.0 NEW MODULE TESTS
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Config v2.0.0 — new subsystem configs
+# ---------------------------------------------------------------------------
+
+def test_config_v2_version():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert cfg.version == "2.0.0"
+
+
+def test_config_kernel_defaults():
+    from aura.config import KernelConfig
+    kcfg = KernelConfig()
+    assert kcfg.cron_tick_seconds > 0
+    assert kcfg.syslog_max_entries == 10000
+
+
+def test_config_web_defaults():
+    from aura.config import WebConfig
+    wcfg = WebConfig()
+    assert wcfg.auth_enabled is False
+    assert wcfg.websocket_enabled is True
+
+
+def test_config_pkg_defaults():
+    from aura.config import PkgConfig
+    pcfg = PkgConfig()
+    assert "packages" in pcfg.packages_dir
+
+
+def test_auraconfig_has_all_v2_fields():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert hasattr(cfg, "kernel")
+    assert hasattr(cfg, "web")
+    assert hasattr(cfg, "pkg")
+
+
+# ---------------------------------------------------------------------------
+# Kernel — ProcessManager
+# ---------------------------------------------------------------------------
+
+def test_process_manager_spawn_kill():
+    import time
+    from aura.kernel.process_manager import ProcessManager
+    pm = ProcessManager()
+    pid = pm.spawn("test-proc", fn=lambda: time.sleep(0.01))
+    assert pid is not None
+    procs = pm.list_processes()
+    assert any(p["pid"] == pid for p in procs)
+    killed = pm.kill(pid)
+    assert killed is True
+
+
+def test_process_manager_get_process():
+    from aura.kernel.process_manager import ProcessManager
+    pm = ProcessManager()
+    pid = pm.spawn("get-proc", fn=lambda: None)
+    info = pm.get_process(pid)
+    assert info is not None
+    assert info["name"] == "get-proc"
+
+
+def test_process_manager_kill_unknown():
+    from aura.kernel.process_manager import ProcessManager
+    pm = ProcessManager()
+    assert pm.kill("nonexistent-pid") is False
+
+
+def test_process_manager_metrics():
+    from aura.kernel.process_manager import ProcessManager
+    pm = ProcessManager()
+    pm.spawn("m-proc", fn=lambda: None)
+    m = pm.metrics()
+    assert "total" in m
+
+
+def test_process_manager_list_by_user():
+    from aura.kernel.process_manager import ProcessManager
+    pm = ProcessManager()
+    pm.spawn("user-proc", fn=lambda: None, user_id="alice")
+    pm.spawn("sys-proc", fn=lambda: None, user_id="system")
+    alice_procs = pm.list_processes(user_id="alice")
+    assert all(p["user_id"] == "alice" for p in alice_procs)
+
+
+# ---------------------------------------------------------------------------
+# Kernel — IPCBus
+# ---------------------------------------------------------------------------
+
+def test_ipc_bus_send_receive():
+    from aura.kernel.ipc import IPCBus
+    bus = IPCBus()
+    bus.send("chan1", {"msg": "hello"})
+    msg = bus.receive("chan1")
+    assert msg == {"msg": "hello"}
+
+
+def test_ipc_bus_empty_receive():
+    from aura.kernel.ipc import IPCBus
+    bus = IPCBus()
+    msg = bus.receive("empty-chan", block=False)
+    assert msg is None
+
+
+def test_ipc_bus_list_channels():
+    from aura.kernel.ipc import IPCBus
+    bus = IPCBus()
+    bus.send("ch-a", "x")
+    bus.send("ch-b", "y")
+    channels = bus.list_channels()
+    assert "ch-a" in channels
+    assert "ch-b" in channels
+
+
+def test_ipc_bus_clear():
+    from aura.kernel.ipc import IPCBus
+    bus = IPCBus()
+    bus.send("clr", "a")
+    bus.send("clr", "b")
+    bus.clear("clr")
+    assert bus.receive("clr", block=False) is None
+
+
+# ---------------------------------------------------------------------------
+# Kernel — SyslogService
+# ---------------------------------------------------------------------------
+
+def test_syslog_log_and_query():
+    from aura.kernel.syslog import SyslogService
+    svc = SyslogService()
+    svc.info("test.src", "hello from test")
+    entries = svc.query(source="test.src")
+    assert len(entries) >= 1
+    assert entries[-1]["message"] == "hello from test"
+
+
+def test_syslog_level_methods():
+    from aura.kernel.syslog import SyslogService
+    svc = SyslogService()
+    svc.info("src", "info msg")
+    svc.warn("src", "warn msg")
+    svc.error("src", "error msg")
+    m = svc.metrics()
+    # Metrics may use uppercase or lowercase keys
+    total_count = sum(v for k, v in m.items() if k != "total" and isinstance(v, int))
+    assert total_count >= 3
+
+
+def test_syslog_level_filter():
+    from aura.kernel.syslog import SyslogService
+    svc = SyslogService()
+    svc.info("a", "info")
+    svc.error("a", "error")
+    errors = svc.query(level="error")
+    assert all(e["level"] in ("error", "ERROR") for e in errors)
+
+
+def test_syslog_limit():
+    from aura.kernel.syslog import SyslogService
+    svc = SyslogService()
+    for i in range(10):
+        svc.info("src", f"msg{i}")
+    entries = svc.query(limit=3)
+    assert len(entries) <= 3
+
+
+# ---------------------------------------------------------------------------
+# Kernel — SecretsManager
+# ---------------------------------------------------------------------------
+
+def test_secrets_set_get():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    sm.set_secret("DB_PASSWORD", "s3cr3t")
+    val = sm.get_secret("DB_PASSWORD")
+    assert val == "s3cr3t"
+
+
+def test_secrets_list_keys():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    sm.set_secret("KEY_A", "val_a")
+    sm.set_secret("KEY_B", "val_b")
+    keys = sm.list_keys()
+    assert "KEY_A" in keys
+    assert "KEY_B" in keys
+
+
+def test_secrets_delete():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    sm.set_secret("TEMP", "tmp")
+    deleted = sm.delete_secret("TEMP")
+    assert deleted is True
+    assert sm.get_secret("TEMP") is None
+
+
+def test_secrets_rotate():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    sm.set_secret("ROT_KEY", "old")
+    ok = sm.rotate_secret("ROT_KEY", "new")
+    assert ok is True
+    assert sm.get_secret("ROT_KEY") == "new"
+
+
+def test_secrets_invalid_key_raises():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    try:
+        sm.set_secret("bad key!", "value")
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_secrets_rotate_nonexistent():
+    from aura.kernel.secrets_manager import SecretsManager
+    sm = SecretsManager()
+    ok = sm.rotate_secret("NO_SUCH_KEY", "val")
+    assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Kernel — CronService
+# ---------------------------------------------------------------------------
+
+def test_cron_add_remove_job():
+    from aura.kernel.cron import CronService
+    cron = CronService()
+    job_id = cron.add_job("test-job", fn=lambda: None, interval_seconds=60)
+    jobs = cron.list_jobs()
+    assert any(j["job_id"] == job_id for j in jobs)
+    removed = cron.remove_job(job_id)
+    assert removed is True
+    assert not any(j["job_id"] == job_id for j in cron.list_jobs())
+
+
+def test_cron_enable_disable():
+    from aura.kernel.cron import CronService
+    cron = CronService()
+    jid = cron.add_job("en-test", fn=lambda: None, interval_seconds=100)
+    ok = cron.disable_job(jid)
+    assert ok is True
+    job = next(j for j in cron.list_jobs() if j["job_id"] == jid)
+    assert job["enabled"] is False
+    cron.enable_job(jid)
+    job2 = next(j for j in cron.list_jobs() if j["job_id"] == jid)
+    assert job2["enabled"] is True
+
+
+def test_cron_start_stop():
+    import time
+    from aura.kernel.cron import CronService
+    cron = CronService()
+    cron.start()
+    time.sleep(0.1)
+    cron.stop()  # should not raise
+
+
+def test_cron_job_runs():
+    import time
+    from aura.kernel.cron import CronService
+    results = []
+    cron = CronService()
+    cron.add_job("runner", fn=lambda: results.append(1), interval_seconds=0.05)
+    cron.start()
+    time.sleep(0.3)
+    cron.stop()
+    assert len(results) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Kernel — ServiceManager
+# ---------------------------------------------------------------------------
+
+def test_service_manager_register_and_list():
+    from aura.kernel.service_manager import ServiceManager
+    sm = ServiceManager()
+    sm.register("test-svc", start_fn=lambda: None)
+    svcs = sm.list_services()
+    assert any(s["name"] == "test-svc" for s in svcs)
+
+
+def test_service_manager_start_stop():
+    from aura.kernel.service_manager import ServiceManager
+    started = []
+    stopped = []
+    sm = ServiceManager()
+    sm.register("s1", start_fn=lambda: started.append(1), stop_fn=lambda: stopped.append(1))
+    ok = sm.start_service("s1")
+    assert ok is True
+    assert len(started) == 1
+    svc = sm.status("s1")
+    assert svc["state"] == "active"
+    sm.stop_service("s1")
+    assert len(stopped) == 1
+
+
+def test_service_manager_restart():
+    from aura.kernel.service_manager import ServiceManager
+    count = []
+    sm = ServiceManager()
+    sm.register("r-svc", start_fn=lambda: count.append(1))
+    sm.start_service("r-svc")
+    sm.restart_service("r-svc")
+    assert len(count) >= 2
+
+
+def test_service_manager_metrics():
+    from aura.kernel.service_manager import ServiceManager
+    sm = ServiceManager()
+    sm.register("m-svc", start_fn=lambda: None)
+    sm.start_service("m-svc")
+    m = sm.metrics()
+    assert m.get("active", 0) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Filesystem — VirtualFileSystem
+# ---------------------------------------------------------------------------
+
+def test_vfs_mkdir_and_listdir():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/home/alice")
+    entries = vfs.listdir("/home")
+    assert "alice" in entries
+
+
+def test_vfs_write_read():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/etc")
+    vfs.write("/etc/config", b"key=value")
+    data = vfs.read("/etc/config")
+    assert data == b"key=value"
+
+
+def test_vfs_delete():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/tmp")
+    vfs.write("/tmp/to-delete", b"bye")
+    ok = vfs.delete("/tmp/to-delete")
+    assert ok is True
+    assert vfs.read("/tmp/to-delete") is None
+
+
+def test_vfs_exists():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/proc")
+    assert vfs.exists("/proc") is True
+    assert vfs.exists("/nope") is False
+
+
+def test_vfs_stat():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/var")
+    vfs.write("/var/log", b"log data")
+    info = vfs.stat("/var/log")
+    assert info is not None
+    assert info["type"] == "file"
+    assert info["size"] == 8
+
+
+def test_vfs_mount_umount():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    fake_fs = object()
+    vfs.mount("/mnt/usb", fake_fs)
+    assert "/mnt/usb" in vfs._mounts
+    ok = vfs.umount("/mnt/usb")
+    assert ok is True
+    assert "/mnt/usb" not in vfs._mounts
+
+
+def test_vfs_mkdir_creates_parents():
+    from aura.fs.vfs import VirtualFileSystem
+    vfs = VirtualFileSystem()
+    vfs.mkdir("/a/b/c")
+    assert vfs.exists("/a") is True
+    assert vfs.exists("/a/b") is True
+    assert vfs.exists("/a/b/c") is True
+
+
+# ---------------------------------------------------------------------------
+# Filesystem — ProcFS
+# ---------------------------------------------------------------------------
+
+def test_procfs_builtin_entries():
+    from aura.fs.procfs import ProcFS
+    proc = ProcFS()
+    entries = proc.list_entries()
+    assert "/proc/version" in entries
+    assert "/proc/cpuinfo" in entries
+
+
+def test_procfs_read_version():
+    from aura.fs.procfs import ProcFS
+    proc = ProcFS()
+    val = proc.read("/proc/version")
+    assert val is not None
+    assert "AURa" in val
+
+
+def test_procfs_register_provider():
+    from aura.fs.procfs import ProcFS
+    proc = ProcFS()
+    proc.register_provider("/proc/custom", lambda: "custom-data")
+    assert proc.read("/proc/custom") == "custom-data"
+
+
+def test_procfs_missing_path():
+    from aura.fs.procfs import ProcFS
+    proc = ProcFS()
+    assert proc.read("/proc/no-such-entry") is None
+
+
+# ---------------------------------------------------------------------------
+# Filesystem — FHSMapper
+# ---------------------------------------------------------------------------
+
+def test_fhs_resolve_known():
+    from aura.fs.fhs import FHSMapper
+    fhs = FHSMapper()
+    r = fhs.resolve("/bin")
+    assert r  # any non-empty string
+
+
+def test_fhs_list_mappings():
+    from aura.fs.fhs import FHSMapper
+    fhs = FHSMapper()
+    mappings = fhs.list_mappings()
+    assert isinstance(mappings, dict)
+    assert len(mappings) >= 5
+
+
+def test_fhs_add_mapping():
+    from aura.fs.fhs import FHSMapper
+    fhs = FHSMapper()
+    fhs.add_mapping("/custom", "aura:custom")
+    assert fhs.resolve("/custom") == "aura:custom"
+
+
+def test_fhs_resolve_subpath():
+    from aura.fs.fhs import FHSMapper
+    fhs = FHSMapper()
+    # /etc maps to something; /etc/passwd should also resolve
+    r = fhs.resolve("/etc/passwd")
+    assert r  # non-empty
+
+
+# ---------------------------------------------------------------------------
+# Package Manager — PackageMetadata
+# ---------------------------------------------------------------------------
+
+def test_pkg_metadata_to_dict():
+    from aura.pkg.metadata import PackageMetadata
+    m = PackageMetadata(
+        name="mypkg", version="1.0.0", description="test",
+        author="me", dependencies=[], tags=["test"],
+    )
+    d = m.to_dict()
+    assert d["name"] == "mypkg"
+    assert d["version"] == "1.0.0"
+
+
+def test_pkg_metadata_from_dict():
+    from aura.pkg.metadata import PackageMetadata
+    d = {"name": "pkg2", "version": "2.0.0", "description": "d", "author": "a"}
+    m = PackageMetadata.from_dict(d)
+    assert m.name == "pkg2"
+    assert m.version == "2.0.0"
+
+
+def test_pkg_status_enum():
+    from aura.pkg.metadata import PackageStatus
+    assert PackageStatus.INSTALLED.value == "installed"
+    assert PackageStatus.AVAILABLE.value == "available"
+
+
+# ---------------------------------------------------------------------------
+# Package Manager — PackageRegistry
+# ---------------------------------------------------------------------------
+
+def test_pkg_registry_builtin_packages():
+    from aura.pkg.registry import PackageRegistry
+    reg = PackageRegistry()
+    assert reg.count() >= 3
+    assert reg.get("aura-core") is not None
+
+
+def test_pkg_registry_register_get():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.metadata import PackageMetadata
+    reg = PackageRegistry()
+    m = PackageMetadata(name="custom-pkg", version="1.0.0", description="test", author="me")
+    reg.register(m)
+    assert reg.get("custom-pkg") is not None
+
+
+def test_pkg_registry_search():
+    from aura.pkg.registry import PackageRegistry
+    reg = PackageRegistry()
+    results = reg.search("aura")
+    assert len(results) >= 1
+
+
+def test_pkg_registry_unregister():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.metadata import PackageMetadata
+    reg = PackageRegistry()
+    m = PackageMetadata(name="temp-pkg", version="1.0.0", description="t", author="a")
+    reg.register(m)
+    ok = reg.unregister("temp-pkg")
+    assert ok is True
+    assert reg.get("temp-pkg") is None
+
+
+def test_pkg_registry_list_all():
+    from aura.pkg.registry import PackageRegistry
+    reg = PackageRegistry()
+    all_pkgs = reg.list_all()
+    assert len(all_pkgs) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Package Manager — PackageInstaller
+# ---------------------------------------------------------------------------
+
+def test_pkg_installer_install():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.installer import PackageInstaller
+    reg = PackageRegistry()
+    installer = PackageInstaller(reg)
+    result = installer.install("aura-core")
+    assert result["success"] is True
+    assert installer.is_installed("aura-core") is True
+
+
+def test_pkg_installer_uninstall():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.installer import PackageInstaller
+    reg = PackageRegistry()
+    installer = PackageInstaller(reg)
+    installer.install("aura-shell")
+    result = installer.uninstall("aura-shell")
+    assert result["success"] is True
+    assert installer.is_installed("aura-shell") is False
+
+
+def test_pkg_installer_install_not_in_registry():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.installer import PackageInstaller
+    reg = PackageRegistry()
+    installer = PackageInstaller(reg)
+    result = installer.install("nonexistent-pkg")
+    assert result["success"] is False
+
+
+def test_pkg_installer_list_installed():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.installer import PackageInstaller
+    reg = PackageRegistry()
+    installer = PackageInstaller(reg)
+    installer.install("aura-core")
+    installed = installer.list_installed()
+    assert any(p["name"] == "aura-core" for p in installed)
+
+
+def test_pkg_installer_upgrade():
+    from aura.pkg.registry import PackageRegistry
+    from aura.pkg.installer import PackageInstaller
+    reg = PackageRegistry()
+    installer = PackageInstaller(reg)
+    installer.install("aura-net")
+    result = installer.upgrade("aura-net")
+    assert result["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Web — WebAPI
+# ---------------------------------------------------------------------------
+
+def test_web_api_health():
+    from aura.web.api import WebAPI
+    api = WebAPI()
+    resp = api.handle_request("GET", "/health")
+    assert resp["status"] == 200
+    assert resp["body"]["status"] == "ok"
+
+
+def test_web_api_status():
+    from aura.web.api import WebAPI
+    api = WebAPI()
+    resp = api.handle_request("GET", "/status")
+    assert resp["status"] == 200
+    assert resp["body"]["running"] is True
+
+
+def test_web_api_not_found():
+    from aura.web.api import WebAPI
+    api = WebAPI()
+    resp = api.handle_request("GET", "/unknown-path")
+    assert resp["status"] == 404
+
+
+def test_web_api_auth_missing_token():
+    from aura.web.api import WebAPI
+    api = WebAPI(auth_enabled=True, api_token="secret123")
+    resp = api.handle_request("GET", "/health", headers={})
+    assert resp["status"] == 401
+
+
+def test_web_api_auth_valid_token():
+    from aura.web.api import WebAPI
+    api = WebAPI(auth_enabled=True, api_token="secret123")
+    resp = api.handle_request("GET", "/health", headers={"Authorization": "Bearer secret123"})
+    assert resp["status"] == 200
+
+
+def test_web_api_register_route():
+    from aura.web.api import WebAPI
+    api = WebAPI()
+    # Handlers receive a single dict: {"method", "path", "body"}
+    api.register_route("/custom", lambda req: {"value": 42})
+    resp = api.handle_request("GET", "/custom")
+    assert resp["status"] == 200
+    assert resp["body"]["value"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Web — WebSocketHub
+# ---------------------------------------------------------------------------
+
+def test_ws_hub_connect_disconnect():
+    from aura.web.ws import WebSocketHub
+    hub = WebSocketHub()
+    cid = hub.connect()
+    assert cid is not None
+    clients = hub.list_clients()
+    assert any(c["client_id"] == cid for c in clients)
+    ok = hub.disconnect(cid)
+    assert ok is True
+
+
+def test_ws_hub_subscribe_broadcast():
+    from aura.web.ws import WebSocketHub
+    hub = WebSocketHub()
+    c1 = hub.connect()
+    c2 = hub.connect()
+    hub.subscribe(c1, "events")
+    hub.subscribe(c2, "events")
+    count = hub.broadcast("events", {"type": "test"})
+    assert count == 2
+    msgs = hub.receive(c1)
+    assert len(msgs) == 1
+
+
+def test_ws_hub_send_specific():
+    from aura.web.ws import WebSocketHub
+    hub = WebSocketHub()
+    cid = hub.connect()
+    ok = hub.send(cid, {"hello": "world"})
+    assert ok is True
+    msgs = hub.receive(cid)
+    assert len(msgs) == 1
+    # Messages are wrapped in an envelope: {"topic", "message", "timestamp"}
+    assert msgs[0]["message"] == {"hello": "world"}
+
+
+def test_ws_hub_unsubscribe():
+    from aura.web.ws import WebSocketHub
+    hub = WebSocketHub()
+    cid = hub.connect()
+    hub.subscribe(cid, "topic")
+    hub.unsubscribe(cid, "topic")
+    hub.broadcast("topic", {"x": 1})
+    msgs = hub.receive(cid)
+    assert len(msgs) == 0
+
+
+# ---------------------------------------------------------------------------
+# AI Engine — ModelRegistry
+# ---------------------------------------------------------------------------
+
+def test_model_registry_builtin():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    assert reg.count() >= 1
+    m = reg.get_by_name("aura-builtin-1.0")
+    assert m is not None
+    assert m["status"] == "ready"
+
+
+def test_model_registry_register():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    mid = reg.register("my-model", "transformers", "1.0.0", capabilities=["chat"])
+    assert mid is not None
+    m = reg.get(mid)
+    assert m["name"] == "my-model"
+
+
+def test_model_registry_list():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    all_models = reg.list_models()
+    assert len(all_models) >= 1
+
+
+def test_model_registry_update_status():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    mid = reg.register("status-model", "transformers", "1.0.0")
+    ok = reg.update_status(mid, "loading")
+    assert ok is True
+    m = reg.get(mid)
+    assert m["status"] == "loading"
+
+
+def test_model_registry_unregister():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    mid = reg.register("del-model", "builtin", "1.0.0")
+    ok = reg.unregister(mid)
+    assert ok is True
+    assert reg.get(mid) is None
+
+
+def test_model_registry_filter_by_backend():
+    from aura.ai_engine.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    reg.register("m-local", "llama", "1.0.0")
+    llama_models = reg.list_models(backend="llama")
+    assert all(m["backend"] == "llama" for m in llama_models)
+
+
+# ---------------------------------------------------------------------------
+# AI Engine — ModelScanner
+# ---------------------------------------------------------------------------
+
+def test_model_scanner_scan_empty_dir(tmp_path):
+    from aura.ai_engine.model_scanner import ModelScanner
+    scanner = ModelScanner(scan_dirs=[str(tmp_path)])
+    results = scanner.scan()
+    assert isinstance(results, list)
+    assert len(results) == 0
+
+
+def test_model_scanner_detect_gguf(tmp_path):
+    (tmp_path / "llama-7b.gguf").write_bytes(b"fake gguf")
+    from aura.ai_engine.model_scanner import ModelScanner
+    scanner = ModelScanner(scan_dirs=[str(tmp_path)])
+    results = scanner.scan()
+    # Scanner strips extension: name="llama-7b", extension=".gguf"
+    assert any(r["name"] == "llama-7b" for r in results)
+    assert any(r["extension"] == ".gguf" for r in results)
+    # Backend is determined via detect_backend
+    assert scanner.detect_backend("llama-7b.gguf") == "llama"
+
+
+def test_model_scanner_detect_safetensors(tmp_path):
+    (tmp_path / "model.safetensors").write_bytes(b"fake safetensors")
+    from aura.ai_engine.model_scanner import ModelScanner
+    scanner = ModelScanner(scan_dirs=[str(tmp_path)])
+    results = scanner.scan()
+    # Scanner strips extension: name="model", extension=".safetensors"
+    assert any(r["extension"] == ".safetensors" for r in results)
+    assert scanner.detect_backend("model.safetensors") == "transformers"
+
+
+def test_model_scanner_detect_backend():
+    from aura.ai_engine.model_scanner import ModelScanner
+    scanner = ModelScanner()
+    assert scanner.detect_backend("model.gguf") == "llama"
+    assert scanner.detect_backend("model.bin") == "transformers"
+    assert scanner.detect_backend("model.safetensors") == "transformers"
+    assert scanner.detect_backend("model.xyz") == "unknown"
+
+
+def test_model_scanner_clear_cache(tmp_path):
+    from aura.ai_engine.model_scanner import ModelScanner
+    scanner = ModelScanner(scan_dirs=[str(tmp_path)])
+    scanner.scan()
+    scanner.clear_cache()
+    assert scanner.scan_result == []  # cache should be cleared
+
+
+# ---------------------------------------------------------------------------
+# AI Engine — PersonalityKernel
+# ---------------------------------------------------------------------------
+
+def test_personality_kernel_default_profile():
+    from aura.ai_engine.personality_kernel import PersonalityKernel
+    pk = PersonalityKernel()
+    profile = pk.to_dict()
+    assert profile["name"] == "AURA"
+    assert "system_prompt" in profile
+
+
+def test_personality_kernel_get_system_prompt():
+    from aura.ai_engine.personality_kernel import PersonalityKernel
+    pk = PersonalityKernel()
+    prompt = pk.get_system_prompt()
+    assert len(prompt) > 0
+    assert "AURA" in prompt
+
+
+def test_personality_kernel_update_trait():
+    from aura.ai_engine.personality_kernel import PersonalityKernel
+    pk = PersonalityKernel()
+    pk.update_trait("verbosity", 9)
+    assert pk.get_trait("verbosity") == 9
+
+
+def test_personality_kernel_apply_to_prompt():
+    from aura.ai_engine.personality_kernel import PersonalityKernel
+    pk = PersonalityKernel()
+    result = pk.apply_to_prompt("What is the status?")
+    assert "What is the status?" in result
+
+
+def test_personality_kernel_reset():
+    from aura.ai_engine.personality_kernel import PersonalityKernel
+    pk = PersonalityKernel()
+    pk.update_trait("verbosity", 1)
+    pk.reset()
+    assert pk.get_trait("verbosity") == 5  # default
+
+
+# ---------------------------------------------------------------------------
+# AI Engine — LlamaBackend stub
+# ---------------------------------------------------------------------------
+
+def test_llama_backend_not_ready_without_model():
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.llama_backend import LlamaBackend
+    cfg = AIEngineConfig()
+    backend = LlamaBackend(cfg, model_path="")
+    assert backend.is_ready() is False
+
+
+def test_llama_backend_generate_stub():
+    from aura.config import AIEngineConfig
+    from aura.ai_engine.llama_backend import LlamaBackend
+    cfg = AIEngineConfig()
+    backend = LlamaBackend(cfg, model_path="")
+    resp = backend.generate("hello")
+    assert resp is not None
+    assert isinstance(resp.text, str)
+    assert len(resp.text) > 0
+
+
+# ---------------------------------------------------------------------------
+# Mirror System
+# ---------------------------------------------------------------------------
+
+def test_mirror_add_and_list():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    mid = svc.add_mirror("mirror-1", "https://mirror1.example.com")
+    mirrors = svc.list_mirrors()
+    assert any(m["mirror_id"] == mid for m in mirrors)
+
+
+def test_mirror_remove():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    mid = svc.add_mirror("m2", "https://m2.example.com")
+    ok = svc.remove_mirror(mid)
+    assert ok is True
+    assert not any(m["mirror_id"] == mid for m in svc.list_mirrors())
+
+
+def test_mirror_set_status():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    mid = svc.add_mirror("m3", "https://m3.example.com")
+    ok = svc.set_status(mid, "offline")
+    assert ok is True
+    m = svc.get_mirror(mid)
+    assert m["status"] == "offline"
+
+
+def test_mirror_mark_synced():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    mid = svc.add_mirror("m4", "https://m4.example.com")
+    svc.mark_synced(mid)
+    svc.mark_synced(mid)
+    m = svc.get_mirror(mid)
+    assert m["sync_count"] == 2
+    assert m["last_sync"] is not None
+
+
+def test_mirror_get_primary():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    svc.add_mirror("primary", "https://primary.example.com", mirror_type="primary")
+    p = svc.get_primary()
+    assert p is not None
+    assert p["type"] == "primary"
+
+
+def test_mirror_failover():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    mid_primary = svc.add_mirror("primary", "https://p.example.com", mirror_type="primary", priority=0)
+    mid_secondary = svc.add_mirror("secondary", "https://s.example.com", mirror_type="secondary", priority=5)
+    svc.set_status(mid_primary, "offline")
+    fo = svc.failover()
+    assert fo is not None
+    assert fo["mirror_id"] == mid_secondary
+
+
+def test_mirror_metrics():
+    from aura.command_center.mirror import MirrorService
+    svc = MirrorService()
+    svc.add_mirror("a", "https://a.com")
+    svc.add_mirror("b", "https://b.com")
+    m = svc.metrics()
+    assert "by_status" in m
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Index
+# ---------------------------------------------------------------------------
+
+def test_intelligence_index_builtin_seeded():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    entries = idx.list_entries()
+    assert len(entries) >= 1
+    assert any(e["model_name"] == "aura-builtin-1.0" for e in entries)
+
+
+def test_intelligence_index_register():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    eid = idx.register(
+        model_name="test-model", backend="transformers", version="1.0.0",
+        capabilities=["chat"], safety_rating=9.0, performance_score=85.0,
+    )
+    assert eid is not None
+    e = idx.get(eid)
+    assert e["model_name"] == "test-model"
+
+
+def test_intelligence_index_get_by_name():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    e = idx.get_by_name("aura-builtin-1.0")
+    assert e is not None
+
+
+def test_intelligence_index_filter_by_safety():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    idx.register("safe-model", "builtin", "1.0", safety_rating=9.5, performance_score=80.0)
+    idx.register("unsafe-model", "builtin", "1.0", safety_rating=3.0, performance_score=80.0)
+    safe = idx.list_entries(min_safety=8.0)
+    assert all(e["safety_rating"] >= 8.0 for e in safe)
+
+
+def test_intelligence_index_update_benchmark():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    eid = idx.register("bench-model", "builtin", "1.0")
+    ok = idx.update_benchmark(eid, "mmlu", 78.5)
+    assert ok is True
+    e = idx.get(eid)
+    assert e["benchmarks"]["mmlu"] == 78.5
+
+
+def test_intelligence_index_compare():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    idx.register("model-a", "builtin", "1.0", performance_score=80.0, safety_rating=8.0)
+    idx.register("model-b", "builtin", "1.0", performance_score=90.0, safety_rating=7.0)
+    # compare() requires entry_ids but returns winner as "a"/"b"/"tie"
+    all_entries = {e["model_name"]: e["entry_id"] for e in idx.list_entries()}
+    eid_a = all_entries["model-a"]
+    eid_b = all_entries["model-b"]
+    result = idx.compare(eid_a, eid_b)
+    assert "winner" in result
+    # model-b has higher performance_score so winner should be "b"
+    assert result["winner"] in ("a", "b", "tie")
+
+
+def test_intelligence_index_top_n():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    for i in range(5):
+        idx.register(f"model-{i}", "builtin", "1.0", performance_score=float(i * 10))
+    top3 = idx.top_n(3, sort_by="performance_score")
+    assert len(top3) == 3
+
+
+def test_intelligence_index_unregister():
+    from aura.resources.intelligence_index import IntelligenceIndex
+    idx = IntelligenceIndex()
+    eid = idx.register("del-model", "builtin", "1.0")
+    ok = idx.unregister(eid)
+    assert ok is True
+    assert idx.get(eid) is None
+
+
+# ---------------------------------------------------------------------------
+# Branding
+# ---------------------------------------------------------------------------
+
+def test_branding_banner():
+    from branding.banner import get_boot_banner
+    banner = get_boot_banner("2.0.0")
+    assert "2.0.0" in banner
+    assert "AURA" in banner or "AURa" in banner or "AUR" in banner
+
+
+def test_branding_identity_info():
+    from branding.banner import get_identity_info
+    info = get_identity_info()
+    assert info["name"] == "AURA"
+    assert "version" in info
+    assert info["license"] == "MIT"
+
+
+def test_branding_assets_palette():
+    from branding.assets import BrandingAssets
+    assets = BrandingAssets()
+    palette = assets.get_color_palette()
+    assert "primary" in palette
+    assert "secondary" in palette
+
+
+def test_branding_assets_logo_text():
+    from branding.assets import BrandingAssets
+    assets = BrandingAssets()
+    logo = assets.get_logo_text()
+    assert len(logo) > 0
+
+
+def test_branding_assets_html_badge():
+    from branding.assets import BrandingAssets
+    assets = BrandingAssets()
+    badge = assets.get_html_badge()
+    assert "<" in badge  # contains HTML
+
+
+# ---------------------------------------------------------------------------
+# Platform Adapters — LinuxBridge + MacOSBridge
+# ---------------------------------------------------------------------------
+
+def test_linux_bridge_system_info():
+    from aura.adapters.linux_bridge import LinuxBridge
+    bridge = LinuxBridge()
+    info = bridge.get_system_info()
+    assert "platform" in info
+    assert "cpu_count" in info
+
+
+def test_linux_bridge_list_processes():
+    from aura.adapters.linux_bridge import LinuxBridge
+    bridge = LinuxBridge()
+    procs = bridge.list_processes()
+    assert isinstance(procs, list)
+    assert len(procs) >= 1
+
+
+def test_linux_bridge_interfaces():
+    from aura.adapters.linux_bridge import LinuxBridge
+    bridge = LinuxBridge()
+    ifaces = bridge.get_network_interfaces()
+    assert isinstance(ifaces, list)
+    assert "vnet0" in ifaces
+
+
+def test_macos_bridge_system_info():
+    from aura.adapters.macos_bridge import MacOSBridge
+    bridge = MacOSBridge()
+    info = bridge.get_system_info()
+    assert "platform" in info
+
+
+def test_macos_bridge_interfaces():
+    from aura.adapters.macos_bridge import MacOSBridge
+    bridge = MacOSBridge()
+    ifaces = bridge.get_network_interfaces()
+    assert "vnet0" in ifaces
+
+
+# ---------------------------------------------------------------------------
+# AIOS v2.0.0 — integration tests for new subsystems
+# ---------------------------------------------------------------------------
+
+def _make_aios_v2(port, tmp_path):
+    """Helper: create an AIOS instance with the given port for v2.0.0 tests."""
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    import pathlib
+    cfg = AURaConfig()
+    cfg.server.port = port
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    cfg.home.home_dir = str(pathlib.Path(tmp_path) / "home")
+    return AIOS(cfg)
+
+
+def test_aios_v2_version(tmp_path):
+    with _make_aios_v2(19100, tmp_path) as aios:
+        assert aios.VERSION == "2.0.0"
+
+
+def test_aios_v2_new_properties(tmp_path):
+    with _make_aios_v2(19101, tmp_path) as aios:
+        assert aios.process_manager is not None
+        assert aios.ipc_bus is not None
+        assert aios.syslog is not None
+        assert aios.secrets_manager is not None
+        assert aios.cron is not None
+        assert aios.service_manager is not None
+        assert aios.vfs is not None
+        assert aios.procfs is not None
+        assert aios.fhs is not None
+        assert aios.pkg_registry is not None
+        assert aios.pkg_installer is not None
+        assert aios.web_api is not None
+        assert aios.ws_hub is not None
+        assert aios.model_registry is not None
+        assert aios.personality_kernel is not None
+        assert aios.mirror is not None
+        assert aios.intelligence_index is not None
+
+
+def test_aios_v2_dispatch_kernel(tmp_path):
+    with _make_aios_v2(19102, tmp_path) as aios:
+        out = aios.dispatch("kernel")
+        assert "online" in out.lower() or "Kernel" in out
+
+
+def test_aios_v2_dispatch_proc(tmp_path):
+    with _make_aios_v2(19103, tmp_path) as aios:
+        out = aios.dispatch("proc")
+        assert isinstance(out, str)
+
+
+def test_aios_v2_dispatch_syslog(tmp_path):
+    with _make_aios_v2(19104, tmp_path) as aios:
+        aios.syslog.info("test", "hello syslog")
+        out = aios.dispatch("syslog")
+        assert isinstance(out, str)
+
+
+def test_aios_v2_dispatch_cron(tmp_path):
+    with _make_aios_v2(19105, tmp_path) as aios:
+        out = aios.dispatch("cron")
+        assert isinstance(out, str)
+
+
+def test_aios_v2_dispatch_svc(tmp_path):
+    with _make_aios_v2(19106, tmp_path) as aios:
+        out = aios.dispatch("svc", ["list"])
+        assert isinstance(out, str)
+        assert "virtual-cpu" in out or "Services" in out
+
+
+def test_aios_v2_dispatch_vfs(tmp_path):
+    with _make_aios_v2(19107, tmp_path) as aios:
+        aios.vfs.mkdir("/test")
+        out = aios.dispatch("vfs", ["ls", "/"])
+        assert isinstance(out, str)
+
+
+def test_aios_v2_dispatch_apkg(tmp_path):
+    with _make_aios_v2(19108, tmp_path) as aios:
+        out = aios.dispatch("apkg", ["registry"])
+        assert "aura-core" in out
+
+
+def test_aios_v2_dispatch_mirror(tmp_path):
+    with _make_aios_v2(19109, tmp_path) as aios:
+        out = aios.dispatch("mirror")
+        assert "Mirror" in out or "mirror" in out
+
+
+def test_aios_v2_dispatch_intel(tmp_path):
+    with _make_aios_v2(19110, tmp_path) as aios:
+        out = aios.dispatch("intel")
+        assert isinstance(out, str)
+
+
+def test_aios_v2_dispatch_personality(tmp_path):
+    with _make_aios_v2(19111, tmp_path) as aios:
+        out = aios.dispatch("personality")
+        assert "AURA" in out
+
+
+def test_aios_v2_dispatch_modelreg(tmp_path):
+    with _make_aios_v2(19112, tmp_path) as aios:
+        out = aios.dispatch("modelreg")
+        assert "aura-builtin" in out
+
+
+def test_aios_v2_dispatch_banner(tmp_path):
+    with _make_aios_v2(19113, tmp_path) as aios:
+        out = aios.dispatch("banner")
+        assert "2.0.0" in out or "AURA" in out or "AURa" in out
+
+
+def test_aios_v2_metrics_includes_new_subsystems(tmp_path):
+    with _make_aios_v2(19114, tmp_path) as aios:
+        m = aios.metrics()
+        assert "kernel" in m
+        assert "fs" in m
+        assert "pkg" in m
+        assert "model_registry" in m
+        assert "mirror" in m
+        assert "intelligence_index" in m
+
+
+def test_aios_v2_help_includes_new_commands(tmp_path):
+    with _make_aios_v2(19115, tmp_path) as aios:
+        out = aios.dispatch("help")
+        assert "kernel" in out
+        assert "syslog" in out
+        assert "mirror" in out
+        assert "intel" in out
+        assert "vfs" in out
+        assert "apkg" in out

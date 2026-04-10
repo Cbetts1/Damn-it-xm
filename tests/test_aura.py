@@ -3963,3 +3963,260 @@ def test_aios_v2_help_includes_new_commands(tmp_path):
         assert "intel" in out
         assert "vfs" in out
         assert "apkg" in out
+
+
+# ---------------------------------------------------------------------------
+# OllamaConfig
+# ---------------------------------------------------------------------------
+
+def test_ollama_config_defaults():
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig()
+    assert cfg.base_url == "http://localhost:11434"
+    assert cfg.model == "llama3.1:8b"
+    assert cfg.use_cloud_router is True
+    assert cfg.timeout_seconds > 0
+
+
+def test_aura_config_has_ollama():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert hasattr(cfg, "ollama")
+    assert cfg.ollama.model == "llama3.1:8b"
+
+
+# ---------------------------------------------------------------------------
+# OllamaBackend — graceful degradation when server not running
+# ---------------------------------------------------------------------------
+
+def test_ollama_backend_not_ready_without_server():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    # Point at a port where nothing is listening
+    cfg = OllamaConfig(base_url="http://localhost:19999", model="llama3.1:8b")
+    b = OllamaBackend(cfg)
+    assert b.is_ready() is False
+
+
+def test_ollama_backend_stub_response():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig(base_url="http://localhost:19999", model="llama3.1:8b")
+    b = OllamaBackend(cfg)
+    resp = b.generate("hello")
+    assert resp is not None
+    assert isinstance(resp.text, str)
+    assert len(resp.text) > 0
+    assert "llama3.1:8b" in resp.model
+
+
+def test_ollama_backend_stub_stream():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig(base_url="http://localhost:19999", model="llama3.1:8b")
+    b = OllamaBackend(cfg)
+    chunks = list(b.stream("test prompt"))
+    assert len(chunks) >= 1
+    assert all(isinstance(c, str) for c in chunks)
+
+
+def test_ollama_backend_list_models_offline():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig(base_url="http://localhost:19999")
+    b = OllamaBackend(cfg)
+    models = b.list_models()
+    assert isinstance(models, list)
+
+
+def test_ollama_backend_server_version_offline():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig(base_url="http://localhost:19999")
+    b = OllamaBackend(cfg)
+    ver = b.server_version()
+    assert ver == ""
+
+
+def test_ollama_backend_properties():
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import OllamaConfig
+    cfg = OllamaConfig(base_url="http://localhost:19999", model="llama3.1:8b")
+    b = OllamaBackend(cfg)
+    assert b.model_name == "llama3.1:8b"
+    assert "19999" in b.base_url
+
+
+# ---------------------------------------------------------------------------
+# Ollama backend registered in AI engine
+# ---------------------------------------------------------------------------
+
+def test_ollama_backend_registered_in_engine():
+    from aura.ai_engine.engine import _BACKEND_REGISTRY
+    assert "ollama" in _BACKEND_REGISTRY
+
+
+def test_ollama_adaptor_via_engine_create():
+    from aura.ai_engine.engine import create_backend
+    from aura.config import AIEngineConfig
+    cfg = AIEngineConfig()
+    cfg.backend = "ollama"
+    cfg.api_base_url = "http://localhost:19999"
+    b = create_backend(cfg)
+    assert b is not None
+    assert b.is_ready() is False
+    resp = b.generate("hello")
+    assert isinstance(resp.text, str)
+
+
+# ---------------------------------------------------------------------------
+# CloudAIRouter
+# ---------------------------------------------------------------------------
+
+def _make_router(tmp_path):
+    """Helper: create a CloudAIRouter with a mock backend (no Ollama needed)."""
+    from aura.cloud.virtual_cloud import VirtualCloud
+    from aura.cpu.virtual_cpu import VirtualCPU
+    from aura.cloud.cloud_ai_router import CloudAIRouter
+    from aura.ai_engine.ollama_backend import OllamaBackend
+    from aura.config import AURaConfig, OllamaConfig
+    import pathlib
+
+    cfg = AURaConfig()
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    cfg.cloud.model_cache_dir = str(pathlib.Path(tmp_path) / "model_cache")
+
+    cloud = VirtualCloud(cfg.cloud)
+    cpu = VirtualCPU(cfg.cpu)
+    cpu.start()
+
+    # Use direct mode so tests don't hang on thread pool
+    ollama_cfg = OllamaConfig(
+        base_url="http://localhost:19999",
+        use_cloud_router=False,
+    )
+    backend = OllamaBackend(ollama_cfg)
+    router = CloudAIRouter(cpu, cloud, backend, ollama_cfg)
+    return router, cpu, cloud
+
+
+def test_cloud_ai_router_not_ready_without_server(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        assert router.is_backend_ready() is False
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+def test_cloud_ai_router_stub_response(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        resp = router.route("hello world")
+        assert resp is not None
+        assert isinstance(resp.text, str)
+        assert len(resp.text) > 0
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+def test_cloud_ai_router_metrics(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        _ = router.route("test query")
+        m = router.metrics()
+        assert m["queries_routed"] >= 1
+        assert "backend" in m
+        assert "model" in m
+        assert m["cloud_router_enabled"] is False
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+def test_cloud_ai_router_backend_info(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        info = router.backend_info()
+        assert "backend_class" in info
+        assert "model_name" in info
+        assert "is_ready" in info
+        assert info["backend_class"] == "OllamaBackend"
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+def test_cloud_ai_router_registers_model_in_cloud(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        models = router.list_cloud_models()
+        model_names = [m["model_name"] for m in models]
+        # The router should have registered the model in the cloud
+        assert any("llama" in n for n in model_names)
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+def test_cloud_ai_router_pull_model_submits(tmp_path):
+    router, cpu, cloud = _make_router(tmp_path)
+    try:
+        ok = router.pull_model("llama3.1:8b")
+        assert ok is True  # submitted (even if Ollama not running)
+    finally:
+        cpu.stop()
+        router.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# AIOS v2 — Cloud AI Router wired into AIOS
+# ---------------------------------------------------------------------------
+
+def test_aios_cloud_ai_router_property(tmp_path):
+    with _make_aios_v2(19150, tmp_path) as aios:
+        assert aios.cloud_ai_router is not None
+
+
+def test_aios_cloud_ai_dispatch_status(tmp_path):
+    with _make_aios_v2(19151, tmp_path) as aios:
+        out = aios.dispatch("cloud-ai", ["status"])
+        assert "Cloud AI Router" in out
+        assert "OllamaBackend" in out
+        assert "llama3.1:8b" in out
+
+
+def test_aios_cloud_ai_dispatch_ask(tmp_path):
+    with _make_aios_v2(19152, tmp_path) as aios:
+        out = aios.dispatch("cloud-ai", ["ask", "hello"])
+        # Should get a graceful stub (Ollama not running in CI)
+        assert isinstance(out, str)
+        assert len(out) > 0
+
+
+def test_aios_cloud_ai_dispatch_models(tmp_path):
+    with _make_aios_v2(19153, tmp_path) as aios:
+        out = aios.dispatch("cloud-ai", ["models"])
+        assert isinstance(out, str)
+
+
+def test_aios_cloud_ai_dispatch_pull(tmp_path):
+    with _make_aios_v2(19154, tmp_path) as aios:
+        out = aios.dispatch("cloud-ai", ["pull"])
+        assert isinstance(out, str)
+        assert "llama3.1:8b" in out or "pull" in out.lower()
+
+
+def test_aios_help_includes_cloud_ai(tmp_path):
+    with _make_aios_v2(19155, tmp_path) as aios:
+        out = aios.dispatch("help")
+        assert "cloud-ai" in out
+
+
+def test_aios_metrics_includes_cloud_ai_router(tmp_path):
+    with _make_aios_v2(19156, tmp_path) as aios:
+        m = aios.metrics()
+        assert "cloud_ai_router" in m
+        assert "backend" in m["cloud_ai_router"]

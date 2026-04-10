@@ -55,6 +55,36 @@ from aura.identity.crypto import CryptoIdentityEngine, IdentityKind
 from aura.identity.registry import IdentityRegistry
 from aura.governance.audit import AuditLog
 
+# v2.0.0 kernel services
+from aura.kernel.process_manager import ProcessManager
+from aura.kernel.ipc import IPCBus
+from aura.kernel.syslog import SyslogService
+from aura.kernel.secrets_manager import SecretsManager
+from aura.kernel.cron import CronService
+from aura.kernel.service_manager import ServiceManager
+
+# v2.0.0 filesystem layer
+from aura.fs.vfs import VirtualFileSystem
+from aura.fs.procfs import ProcFS
+from aura.fs.fhs import FHSMapper
+
+# v2.0.0 package manager
+from aura.pkg.registry import PackageRegistry
+from aura.pkg.installer import PackageInstaller
+
+# v2.0.0 web/remote layer
+from aura.web.api import WebAPI
+from aura.web.ws import WebSocketHub
+
+# v2.0.0 AI engine enhancements
+from aura.ai_engine.model_registry import ModelRegistry
+from aura.ai_engine.personality_kernel import PersonalityKernel
+
+# v2.0.0 mirror + intelligence index + branding
+from aura.command_center.mirror import MirrorService
+from aura.resources.intelligence_index import IntelligenceIndex
+from branding.banner import get_boot_banner
+
 _logger = get_logger("aura.os")
 
 # ---------------------------------------------------------------------------
@@ -67,7 +97,7 @@ class AIOS:
     The single physical AI component that bridges all virtual infrastructure.
     """
 
-    VERSION = "1.3.0"
+    VERSION = "2.0.0"
 
     def __init__(self, config: Optional[AURaConfig] = None) -> None:
         self._config = config or AURaConfig.from_env()
@@ -121,6 +151,35 @@ class AIOS:
         # OS-level command registry — built-ins are handled in dispatch(),
         # custom commands registered via register_command() live here.
         self._commands: Dict[str, Callable] = {}
+
+        # v2.0.0 kernel services
+        self._process_manager: Optional[ProcessManager] = None
+        self._ipc_bus: Optional[IPCBus] = None
+        self._syslog: Optional[SyslogService] = None
+        self._secrets_manager: Optional[SecretsManager] = None
+        self._cron: Optional[CronService] = None
+        self._service_manager: Optional[ServiceManager] = None
+
+        # v2.0.0 filesystem layer
+        self._vfs: Optional[VirtualFileSystem] = None
+        self._procfs: Optional[ProcFS] = None
+        self._fhs: Optional[FHSMapper] = None
+
+        # v2.0.0 package manager
+        self._pkg_registry: Optional[PackageRegistry] = None
+        self._pkg_installer: Optional[PackageInstaller] = None
+
+        # v2.0.0 web/remote layer
+        self._web_api: Optional[WebAPI] = None
+        self._ws_hub: Optional[WebSocketHub] = None
+
+        # v2.0.0 AI engine enhancements
+        self._model_registry: Optional[ModelRegistry] = None
+        self._personality_kernel: Optional[PersonalityKernel] = None
+
+        # v2.0.0 mirror + intelligence index
+        self._mirror: Optional[MirrorService] = None
+        self._intelligence_index: Optional[IntelligenceIndex] = None
 
         # Event subscriptions
         EVENT_BUS.subscribe("*", self._on_event)
@@ -232,6 +291,93 @@ class AIOS:
     def bootloader(self) -> Optional[Bootloader]:
         return self._bootloader
 
+    # v2.0.0 kernel service properties
+
+    @property
+    def process_manager(self) -> ProcessManager:
+        assert self._process_manager is not None, "AIOS not started"
+        return self._process_manager
+
+    @property
+    def ipc_bus(self) -> IPCBus:
+        assert self._ipc_bus is not None, "AIOS not started"
+        return self._ipc_bus
+
+    @property
+    def syslog(self) -> SyslogService:
+        assert self._syslog is not None, "AIOS not started"
+        return self._syslog
+
+    @property
+    def secrets_manager(self) -> SecretsManager:
+        assert self._secrets_manager is not None, "AIOS not started"
+        return self._secrets_manager
+
+    @property
+    def cron(self) -> CronService:
+        assert self._cron is not None, "AIOS not started"
+        return self._cron
+
+    @property
+    def service_manager(self) -> ServiceManager:
+        assert self._service_manager is not None, "AIOS not started"
+        return self._service_manager
+
+    @property
+    def vfs(self) -> VirtualFileSystem:
+        assert self._vfs is not None, "AIOS not started"
+        return self._vfs
+
+    @property
+    def procfs(self) -> ProcFS:
+        assert self._procfs is not None, "AIOS not started"
+        return self._procfs
+
+    @property
+    def fhs(self) -> FHSMapper:
+        assert self._fhs is not None, "AIOS not started"
+        return self._fhs
+
+    @property
+    def pkg_registry(self) -> PackageRegistry:
+        assert self._pkg_registry is not None, "AIOS not started"
+        return self._pkg_registry
+
+    @property
+    def pkg_installer(self) -> PackageInstaller:
+        assert self._pkg_installer is not None, "AIOS not started"
+        return self._pkg_installer
+
+    @property
+    def web_api(self) -> WebAPI:
+        assert self._web_api is not None, "AIOS not started"
+        return self._web_api
+
+    @property
+    def ws_hub(self) -> WebSocketHub:
+        assert self._ws_hub is not None, "AIOS not started"
+        return self._ws_hub
+
+    @property
+    def model_registry(self) -> ModelRegistry:
+        assert self._model_registry is not None, "AIOS not started"
+        return self._model_registry
+
+    @property
+    def personality_kernel(self) -> PersonalityKernel:
+        assert self._personality_kernel is not None, "AIOS not started"
+        return self._personality_kernel
+
+    @property
+    def mirror(self) -> MirrorService:
+        assert self._mirror is not None, "AIOS not started"
+        return self._mirror
+
+    @property
+    def intelligence_index(self) -> IntelligenceIndex:
+        assert self._intelligence_index is not None, "AIOS not started"
+        return self._intelligence_index
+
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
     # ------------------------------------------------------------------
@@ -324,10 +470,11 @@ class AIOS:
 
         self._logger.info("=" * 60)
         self._logger.info("  AURa v%s — Booting AI OS …", self.VERSION)
+        self._logger.info("  %s", get_boot_banner(self.VERSION).split("\n")[0])
         self._logger.info("=" * 60)
 
         # 0a. Platform detection
-        self._logger.info("[0a/8] Detecting platform capabilities…")
+        self._logger.info("[0a/9] Detecting platform capabilities…")
         self._capabilities = detect_capabilities()
         self._bridge = AndroidBridge(capabilities=self._capabilities)
         self._logger.info(
@@ -338,11 +485,11 @@ class AIOS:
         )
 
         # 0b. Persistence + Plugin init
-        self._logger.info("[0b/8] Initialising persistence engine…")
+        self._logger.info("[0b/9] Initialising persistence engine…")
         db_path = os.path.join(self._config.data_dir, "aura.db")
         self._persistence = PersistenceEngine(db_path)
 
-        self._logger.info("[0c/8] Loading plugin manager…")
+        self._logger.info("[0c/9] Loading plugin manager…")
         self._plugin_manager = PluginManager(aios=self)
         self._plugin_manager.register(SystemInfoPlugin())
         self._plugin_manager.register(StoragePlugin())
@@ -352,14 +499,14 @@ class AIOS:
         # ----------------------------------------------------------------
 
         # 0d. Governance audit log (subscribes to EventBus before ROOT starts)
-        self._logger.info("[0d/8] Initialising audit log…")
+        self._logger.info("[0d/9] Initialising audit log…")
         self._audit_log = AuditLog(
             max_entries=self._config.root.audit_log_max_entries,
             data_dir=self._config.data_dir,
         )
 
         # 0e. Cryptographic identity
-        self._logger.info("[0e/8] Initialising cryptographic identity…")
+        self._logger.info("[0e/9] Initialising cryptographic identity…")
         self._crypto_engine = CryptoIdentityEngine(self._config.root.root_secret)
         self._identity_registry = IdentityRegistry(self._crypto_engine)
         # Issue ROOT identity token
@@ -369,31 +516,73 @@ class AIOS:
             metadata={"role": "sovereign", "version": self.VERSION},
         )
 
+        # 0f. v2.0.0 Kernel services
+        self._logger.info("[0f/9] Starting kernel services…")
+        self._process_manager = ProcessManager()
+        self._ipc_bus = IPCBus()
+        self._syslog = SyslogService()
+        self._secrets_manager = SecretsManager()
+        self._cron = CronService()
+        self._service_manager = ServiceManager()
+        self._cron.start()
+        self._syslog.info("aura.kernel", "Kernel services started")
+
+        # 0g. v2.0.0 Filesystem layer
+        self._logger.info("[0g/9] Mounting virtual filesystem layers…")
+        self._vfs = VirtualFileSystem()
+        self._procfs = ProcFS()
+        self._fhs = FHSMapper()
+        # Register procfs provider for uptime
+        self._procfs.register_provider("/proc/aura/version", lambda: self.VERSION)
+
+        # 0h. v2.0.0 Package manager
+        self._logger.info("[0h/9] Initialising package manager…")
+        self._pkg_registry = PackageRegistry()
+        self._pkg_installer = PackageInstaller(self._pkg_registry)
+
+        # 0i. v2.0.0 Web/remote layer
+        self._logger.info("[0i/9] Initialising web/remote layer…")
+        self._web_api = WebAPI(
+            auth_enabled=self._config.web.auth_enabled,
+            api_token=self._config.web.api_token,
+        )
+        self._ws_hub = WebSocketHub()
+
+        # 0j. v2.0.0 AI Engine enhancements
+        self._logger.info("[0j/9] Initialising AI engine enhancements…")
+        self._model_registry = ModelRegistry()
+        self._personality_kernel = PersonalityKernel()
+
+        # 0k. v2.0.0 Mirror + Intelligence Index
+        self._logger.info("[0k/9] Initialising mirror service and intelligence index…")
+        self._mirror = MirrorService()
+        self._intelligence_index = IntelligenceIndex()
+
         # 1. ROOT sovereign layer
-        self._logger.info("[1/8] Bringing ROOT sovereign layer online…")
+        self._logger.info("[1/9] Bringing ROOT sovereign layer online…")
         self._root = ROOTLayer(self._config)
         self._root.start()
 
         # 2. AI Engine (the brain — the only "physical" AI component)
-        self._logger.info("[2/8] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
+        self._logger.info("[2/9] Initialising AI Engine (%s)…", self._config.ai_engine.backend)
         self._ai_engine = AIEngine(self._config.ai_engine)
 
         # 3. Virtual Cloud (large model storage + distributed compute)
-        self._logger.info("[3/8] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
+        self._logger.info("[3/9] Provisioning Virtual Cloud (%d nodes)…", self._config.cloud.compute_nodes)
         self._cloud = VirtualCloud(self._config.cloud)
 
         # 4. Virtual CPU (task scheduler)
-        self._logger.info("[4/8] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
+        self._logger.info("[4/9] Starting Virtual CPU (%d vCores)…", self._config.cpu.virtual_cores)
         self._cpu = VirtualCPU(self._config.cpu)
         self._cpu.start()
 
         # 5. Virtual Server (HTTP API + dashboard)
-        self._logger.info("[5/8] Starting Virtual Server (port %d)…", self._config.server.port)
+        self._logger.info("[5/9] Starting Virtual Server (port %d)…", self._config.server.port)
         self._server = VirtualServer(self._config.server)
         self._server.start(self)
 
         # 6. Virtual hardware /dev/* devices
-        self._logger.info("[6/8] Claiming /dev/* virtual hardware devices…")
+        self._logger.info("[6/9] Claiming /dev/* virtual hardware devices…")
         self._dev_vcpu = VCPUDevice(self._cpu)
         self._dev_vram = VRAMDevice(total_mb=32_768.0)
         vdisk_dir = os.path.join(self._config.data_dir, "vdisk")
@@ -419,13 +608,13 @@ class AIOS:
         self._device_manager.register("/dev/vgpu",  "vgpu",  self._dev_vgpu,  "root")
 
         # 7. HOME userland
-        self._logger.info("[7/8] Mounting HOME userland…")
+        self._logger.info("[7/9] Mounting HOME userland…")
         self._home = HOMELayer(self._config.home)
         self._home.start()
         self._root.mount_home(self._home)
 
         # 8. Build pipeline
-        self._logger.info("[8/8] Initialising build pipeline…")
+        self._logger.info("[8/9] Initialising build pipeline…")
         self._build_pipeline = BuildPipeline(
             config=self._config.build,
             approval_gate=self._root.approval_gate,
@@ -453,6 +642,30 @@ class AIOS:
             start_fn=lambda: None,   # stateless, always ready
             restart_on_failure=False,
         )
+        # v2.0.0 services
+        self._aura_init.register(
+            "kernel-cron",
+            start_fn=lambda: None,   # already started above
+            stop_fn=lambda: self._cron.stop() if self._cron else None,
+            restart_on_failure=False,
+        )
+
+        # 9. Register services with v2.0.0 service manager
+        self._logger.info("[9/9] Registering services…")
+        self._service_manager.register(
+            "virtual-cpu",
+            start_fn=lambda: None,
+            stop_fn=lambda: self._cpu.stop() if self._cpu else None,
+        )
+        self._service_manager.register(
+            "kernel-cron",
+            start_fn=lambda: None,
+            stop_fn=lambda: self._cron.stop() if self._cron else None,
+        )
+        self._service_manager.register(
+            "web-api",
+            start_fn=lambda: None,
+        )
 
         # Register the AI model in the cloud registry
         self._cloud.register_model(
@@ -469,12 +682,16 @@ class AIOS:
         self._running = True
 
         self._logger.info("=" * 60)
-        self._logger.info("  AURa AI OS is ONLINE")
+        self._logger.info("  AURa AI OS v%s is ONLINE", self.VERSION)
         self._logger.info("  Dashboard : http://localhost:%d/dashboard", self._config.server.port)
         self._logger.info("  API       : http://localhost:%d/api/v1/", self._config.server.port)
         self._logger.info("  ROOT      : online (policy=deny-by-default)")
         self._logger.info("  HOME      : mounted (%s)", self._config.home.home_dir)
         self._logger.info("  /dev/*    : 6 devices registered")
+        self._logger.info("  Kernel    : process_manager, ipc, syslog, secrets, cron, services")
+        self._logger.info("  FS        : vfs, procfs, fhs")
+        self._logger.info("  Pkg       : registry + installer")
+        self._logger.info("  Web       : api + websocket hub")
         self._logger.info("=" * 60)
 
         EVENT_BUS.publish("aios.started", {"version": self.VERSION})
@@ -486,6 +703,9 @@ class AIOS:
         self._logger.info("AURa AI OS shutting down…")
         # Persist state before tearing down subsystems
         self._save_state()
+        # Stop v2.0.0 kernel services
+        if self._cron:
+            self._cron.stop()
         # Flush audit log
         if self._audit_log:
             self._audit_log.flush_to_disk()
@@ -557,6 +777,31 @@ class AIOS:
             "vgpu": self._dev_vgpu.metrics() if self._dev_vgpu else {},
             "identity": self._identity_registry.metrics() if self._identity_registry else {},
             "audit": self._audit_log.metrics() if self._audit_log else {},
+            # v2.0.0 new subsystems
+            "kernel": {
+                "processes": self._process_manager.metrics() if self._process_manager else {},
+                "syslog": self._syslog.metrics() if self._syslog else {},
+                "cron_jobs": len(self._cron.list_jobs()) if self._cron else 0,
+                "services": self._service_manager.metrics() if self._service_manager else {},
+            },
+            "fs": {
+                "vfs_mounts": len(self._vfs._mounts) if self._vfs else 0,
+                "procfs_entries": len(self._procfs.list_entries()) if self._procfs else 0,
+                "fhs_mappings": len(self._fhs.list_mappings()) if self._fhs else 0,
+            },
+            "pkg": {
+                "registry_count": self._pkg_registry.count() if self._pkg_registry else 0,
+                "installed_count": len(self._pkg_installer.list_installed()) if self._pkg_installer else 0,
+            },
+            "model_registry": {
+                "count": self._model_registry.count() if self._model_registry else 0,
+            },
+            "intelligence_index": {
+                "count": len(self._intelligence_index.list_entries()) if self._intelligence_index else 0,
+            },
+            "mirror": {
+                "count": len(self._mirror.list_mirrors()) if self._mirror else 0,
+            },
             "timestamp": utcnow(),
         }
 
@@ -774,7 +1019,7 @@ class AIOS:
 
         elif cmd in ("help", "?"):
             base = (
-                "AURa OS Commands:\n"
+                "AURa OS v2.0.0 Commands:\n"
                 "  status        — system health overview\n"
                 "  metrics       — detailed component metrics\n"
                 "  cloud         — virtual cloud metrics\n"
@@ -806,6 +1051,18 @@ class AIOS:
                 "  build …       — build pipeline (run/list/approve/reject)\n"
                 "  identity      — identity registry status\n"
                 "  audit         — recent audit log entries\n"
+                "  kernel        — kernel services status\n"
+                "  proc          — process manager status\n"
+                "  syslog        — system log viewer\n"
+                "  cron …        — cron job management\n"
+                "  svc …         — service manager\n"
+                "  vfs …         — virtual filesystem operations\n"
+                "  apkg …        — AURA package manager (registry/install/list)\n"
+                "  mirror        — mirror service status\n"
+                "  intel         — intelligence index summary\n"
+                "  personality   — AI personality kernel status\n"
+                "  modelreg      — AI model registry\n"
+                "  banner        — show AURA boot banner\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
@@ -1163,6 +1420,190 @@ class AIOS:
                     f"{e['resource']:<25} {e['outcome']}"
                 )
             return "\n".join(lines)
+
+        elif cmd == "kernel":
+            lines = [
+                "── Kernel Services (v2.0.0) ────────────────────────",
+                f"  ProcessManager : {'online' if self._process_manager else 'offline'}",
+                f"  IPCBus         : {'online' if self._ipc_bus else 'offline'}",
+                f"  SyslogService  : {'online' if self._syslog else 'offline'}",
+                f"  SecretsManager : {'online' if self._secrets_manager else 'offline'}",
+                f"  CronService    : {'online' if self._cron else 'offline'}",
+                f"  ServiceManager : {'online' if self._service_manager else 'offline'}",
+            ]
+            if self._service_manager:
+                m = self._service_manager.metrics()
+                lines.append(f"  Services       : {m.get('total', 0)} total  active={m.get('active', 0)}")
+            return "\n".join(lines)
+
+        elif cmd == "proc":
+            if self._process_manager is None:
+                return "proc: process manager not initialised"
+            procs = self._process_manager.list_processes()
+            m = self._process_manager.metrics()
+            lines = [f"── Processes ({m.get('total', 0)} total) ────────────────────"]
+            for p in procs[-20:]:
+                lines.append(
+                    f"  [{p['state']:<8}] {p['pid']}  {p['name']}"
+                )
+            return "\n".join(lines) if len(lines) > 1 else "proc: no processes"
+
+        elif cmd == "syslog":
+            if self._syslog is None:
+                return "syslog: not initialised"
+            limit = int(args[0]) if args and args[0].isdigit() else 20
+            level = args[1] if len(args) > 1 else None
+            entries = self._syslog.query(level=level, limit=limit)
+            if not entries:
+                return "syslog: no entries"
+            lines = [f"Syslog (last {limit}):"]
+            for e in entries:
+                lines.append(f"  [{e['level']:<5}] {e['timestamp'][:19]}  {e['source']}: {e['message']}")
+            return "\n".join(lines)
+
+        elif cmd == "cron":
+            if self._cron is None:
+                return "cron: not initialised"
+            jobs = self._cron.list_jobs()
+            if not jobs:
+                return "cron: no jobs registered"
+            lines = [f"Cron Jobs ({len(jobs)}):"]
+            for j in jobs:
+                en = "✓" if j["enabled"] else "✗"
+                lines.append(
+                    f"  [{en}] {j['job_id']}  {j['name']:<20}  every {j['interval_seconds']}s  runs={j['run_count']}"
+                )
+            return "\n".join(lines)
+
+        elif cmd == "svc":
+            if self._service_manager is None:
+                return "svc: not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "list" or not sub:
+                svcs = self._service_manager.list_services()
+                if not svcs:
+                    return "svc: no services"
+                lines = [f"Services ({len(svcs)}):"]
+                for s in svcs:
+                    lines.append(f"  [{s['state']:<8}] {s['name']}")
+                return "\n".join(lines)
+            elif sub == "start" and len(args) >= 2:
+                ok = self._service_manager.start_service(args[1])
+                return f"svc: started {args[1]}" if ok else f"svc: {args[1]} not found"
+            elif sub == "stop" and len(args) >= 2:
+                ok = self._service_manager.stop_service(args[1])
+                return f"svc: stopped {args[1]}" if ok else f"svc: {args[1]} not found"
+            elif sub == "restart" and len(args) >= 2:
+                ok = self._service_manager.restart_service(args[1])
+                return f"svc: restarted {args[1]}" if ok else f"svc: {args[1]} not found"
+            else:
+                return "Usage: svc [list|start <name>|stop <name>|restart <name>]"
+
+        elif cmd == "vfs":
+            if self._vfs is None:
+                return "vfs: not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "ls" and len(args) >= 2:
+                entries = self._vfs.listdir(args[1])
+                return "\n".join(entries) if entries else "(empty)"
+            elif sub == "mkdir" and len(args) >= 2:
+                ok = self._vfs.mkdir(args[1])
+                return f"vfs: mkdir {args[1]}" if ok else f"vfs: {args[1]} already exists"
+            elif sub == "stat" and len(args) >= 2:
+                info = self._vfs.stat(args[1])
+                return str(info) if info else f"vfs: {args[1]} not found"
+            elif sub == "mounts":
+                mounts = list(self._vfs._mounts.keys())
+                return "\n".join(mounts) if mounts else "vfs: no mounts"
+            else:
+                return "Usage: vfs [ls <path>|mkdir <path>|stat <path>|mounts]"
+
+        elif cmd == "apkg":
+            if self._pkg_installer is None:
+                return "apkg: package manager not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "list" or not sub:
+                installed = self._pkg_installer.list_installed()
+                if not installed:
+                    return "apkg: no packages installed"
+                lines = [f"Installed AURA packages ({len(installed)}):"]
+                for p in installed:
+                    lines.append(f"  {p['name']:<24} {p['version']}")
+                return "\n".join(lines)
+            elif sub == "registry":
+                pkgs = self._pkg_registry.list_all() if self._pkg_registry else []
+                lines = [f"Package registry ({len(pkgs)} packages):"]
+                for p in pkgs:
+                    lines.append(f"  {p.name:<24} {p.version}  {p.description}")
+                return "\n".join(lines)
+            elif sub == "install" and len(args) >= 2:
+                result = self._pkg_installer.install(args[1])
+                return f"apkg: {result['message']}"
+            elif sub == "remove" and len(args) >= 2:
+                result = self._pkg_installer.uninstall(args[1])
+                return f"apkg: {result['message']}"
+            else:
+                return "Usage: apkg [list|registry|install <name>|remove <name>]"
+
+        elif cmd == "mirror":
+            if self._mirror is None:
+                return "mirror: not initialised"
+            m = self._mirror.metrics()
+            mirrors = self._mirror.list_mirrors()
+            lines = [
+                f"── Mirror Service ──────────────────────────────────",
+                f"  Total mirrors  : {len(mirrors)}",
+                f"  Online         : {m.get('by_status', {}).get('online', 0)}",
+                f"  Offline        : {m.get('by_status', {}).get('offline', 0)}",
+            ]
+            primary = self._mirror.get_primary()
+            if primary:
+                lines.append(f"  Primary        : {primary['name']} ({primary['url']})")
+            return "\n".join(lines)
+
+        elif cmd == "intel":
+            if self._intelligence_index is None:
+                return "intel: not initialised"
+            top = self._intelligence_index.top_n(5, sort_by="performance_score")
+            lines = [f"── Intelligence Index ({len(self._intelligence_index.list_entries())} entries) ─────"]
+            for e in top:
+                lines.append(
+                    f"  {e['model_name']:<24} safety={e['safety_rating']:.1f}  perf={e['performance_score']:.1f}"
+                )
+            return "\n".join(lines)
+
+        elif cmd == "personality":
+            if self._personality_kernel is None:
+                return "personality: not initialised"
+            profile = self._personality_kernel.to_dict()
+            lines = [
+                f"── AI Personality Kernel ───────────────────────────",
+                f"  Name           : {profile.get('name')}",
+                f"  Tone           : {profile.get('tone')}",
+                f"  Verbosity      : {profile.get('verbosity')}/10",
+                f"  Empathy        : {profile.get('empathy')}/10",
+                f"  Tech depth     : {profile.get('technical_depth')}/10",
+                f"  Language       : {profile.get('language')}",
+                f"  Traits         : {', '.join(profile.get('traits', []))}",
+            ]
+            return "\n".join(lines)
+
+        elif cmd == "modelreg":
+            if self._model_registry is None:
+                return "modelreg: not initialised"
+            models = self._model_registry.list_models()
+            if not models:
+                return "modelreg: no models registered"
+            lines = [f"AI Model Registry ({len(models)} models):"]
+            for m in models:
+                lines.append(
+                    f"  {m['model_id']}  {m['name']:<24} [{m['backend']}]  status={m['status']}"
+                )
+            return "\n".join(lines)
+
+        elif cmd == "banner":
+            from branding.banner import get_boot_banner
+            return get_boot_banner(self.VERSION)
 
         elif cmd in self._commands:
             # Custom registered command

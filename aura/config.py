@@ -140,10 +140,41 @@ class ComputeConfig:
 
 
 @dataclass
+class KernelConfig:
+    """Kernel services configuration."""
+    # CronService tick interval
+    cron_tick_seconds: float = 1.0
+    # SecretsManager — allowed key pattern (alphanumeric + underscore)
+    secrets_key_pattern: str = r"^[A-Za-z0-9_]+$"
+    # SyslogService — max rolling entries
+    syslog_max_entries: int = 10000
+    # ProcessManager — max tracked processes
+    process_max_tracked: int = 1024
+
+
+@dataclass
+class WebConfig:
+    """Web / remote control layer configuration."""
+    auth_enabled: bool = False
+    api_token: Optional[str] = None
+    websocket_enabled: bool = True
+    max_ws_clients: int = 64
+
+
+@dataclass
+class PkgConfig:
+    """Package Manager configuration."""
+    # Directory where installed packages are tracked
+    packages_dir: str = os.path.join(os.path.expanduser("~"), ".aura", "packages")
+    # Whether to allow installation of unsigned packages
+    allow_unsigned: bool = True
+
+
+@dataclass
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
-    version: str = "1.3.0"
+    version: str = "2.0.0"
     log_level: str = "INFO"
     data_dir: str = os.path.join(os.path.expanduser("~"), ".aura")
 
@@ -159,6 +190,11 @@ class AURaConfig:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
     compute: ComputeConfig = field(default_factory=ComputeConfig)
+
+    # v2.0.0 new subsystems
+    kernel: KernelConfig = field(default_factory=KernelConfig)
+    web: WebConfig = field(default_factory=WebConfig)
+    pkg: PkgConfig = field(default_factory=PkgConfig)
 
     @classmethod
     def from_env(cls) -> "AURaConfig":

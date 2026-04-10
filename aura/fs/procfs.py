@@ -68,7 +68,7 @@ class ProcFS:
             result = provider()
             _logger.debug("read: '%s' -> %r", proc_path, result)
             return result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # providers are user-supplied; catch all to stay stable
             _logger.error("read: provider for '%s' raised: %s", proc_path, exc)
             return None
 

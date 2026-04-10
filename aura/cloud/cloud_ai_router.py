@@ -278,11 +278,3 @@ class CloudAIRouter:
             )
         except Exception as exc:
             _logger.debug("Could not register model in cloud: %s", exc)
-
-    def _get_priority(self):
-        """Lazily resolve the TaskPriority.HIGH enum value."""
-        try:
-            from aura.cpu.virtual_cpu import TaskPriority
-            return TaskPriority.HIGH
-        except Exception:
-            return 1

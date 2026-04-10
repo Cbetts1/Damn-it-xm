@@ -957,7 +957,7 @@ class AIOS:
                 if self._cloud_ai_router is None:
                     return "Cloud AI Router not initialised."
                 target = model or self._config.ollama.model
-                ok = self._cloud_ai_router.pull_model(model)
+                ok = self._cloud_ai_router.pull_model(target)
                 if ok:
                     return (
                         f"Pull task submitted for model '{target}'.\n"

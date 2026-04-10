@@ -65,7 +65,7 @@ class OllamaBackend(BaseBackend):
     def __init__(self, config: OllamaConfig) -> None:
         self._config = config
         self._base_url = config.base_url.rstrip("/")
-        self._model = config.model or DEFAULT_MODEL
+        self._model = config.model if config.model else DEFAULT_MODEL
         self._timeout = config.timeout_seconds
         _logger.debug(
             "OllamaBackend created (url=%s, model=%s).",

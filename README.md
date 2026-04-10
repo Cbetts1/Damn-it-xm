@@ -1,6 +1,6 @@
-# AURa — Autonomous Universal Resource Architecture
+# AURa — AI Universal Resource Os thats vitural.
 
-> **AI-first virtual system** · Free & Open Source · Python 3.9+
+> **AI-first virtual system** ·
 
 [![Version](https://img.shields.io/badge/version-1.2.0-blue?style=flat-square)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)

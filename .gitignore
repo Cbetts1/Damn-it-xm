@@ -3,7 +3,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 dist/
-build/
+/build/
 .pytest_cache/
 *.db
 .aura/

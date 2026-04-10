@@ -3520,7 +3520,7 @@ def test_model_scanner_clear_cache(tmp_path):
     scanner = ModelScanner(scan_dirs=[str(tmp_path)])
     scanner.scan()
     scanner.clear_cache()
-    assert scanner.scan_result == [] or scanner.scan_result is not None
+    assert scanner.scan_result == []  # cache should be cleared
 
 
 # ---------------------------------------------------------------------------

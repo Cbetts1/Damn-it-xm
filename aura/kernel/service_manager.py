@@ -67,7 +67,7 @@ class ServiceManager:
         """
         with self._lock:
             if name in self._services:
-                raise ValueError(f"Service {name!r} is already registered")
+                raise ValueError(f"Service '{name}' is already registered")
             self._services[name] = {
                 "name": name,
                 "state": "inactive",

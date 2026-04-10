@@ -103,7 +103,8 @@ class IPCBus:
     # ------------------------------------------------------------------
 
     def _get_or_create(self, channel: str) -> queue.Queue:
-        if channel not in self._channels:
-            self._channels[channel] = queue.Queue()
-            _logger.debug("Created channel %s", channel)
-        return self._channels[channel]
+        # setdefault is atomic for dict; no lock needed for this check-and-set.
+        q = self._channels.setdefault(channel, queue.Queue())
+        if q is self._channels[channel]:
+            _logger.debug("Accessed channel %s", channel)
+        return q

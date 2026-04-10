@@ -18,6 +18,7 @@ from aura.utils import get_logger, utcnow
 _logger = get_logger("aura.kernel.service_manager")
 
 _VALID_STATES = ("active", "inactive", "failed")
+_MAX_AUTO_RESTARTS = 3
 
 
 class ServiceManager:
@@ -82,7 +83,7 @@ class ServiceManager:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def start_service(self, name: str) -> bool:
+    def start_service(self, name: str, _retry: int = 0) -> bool:
         """
         Start a registered service.
 
@@ -109,11 +110,19 @@ class ServiceManager:
             _logger.error("Service %s failed to start: %s", name, exc)
             with self._lock:
                 svc["state"] = "failed"
-            if svc["auto_restart"]:
-                _logger.info("Auto-restarting service: %s", name)
+            if svc["auto_restart"] and _retry < _MAX_AUTO_RESTARTS:
+                _logger.info(
+                    "Auto-restarting service: %s (attempt %d/%d)",
+                    name, _retry + 1, _MAX_AUTO_RESTARTS,
+                )
                 with self._lock:
                     svc["restart_count"] += 1
-                return self.start_service(name)
+                return self.start_service(name, _retry=_retry + 1)
+            if svc["auto_restart"]:
+                _logger.error(
+                    "Service %s exceeded max auto-restart attempts (%d)",
+                    name, _MAX_AUTO_RESTARTS,
+                )
             return False
 
     def stop_service(self, name: str) -> bool:

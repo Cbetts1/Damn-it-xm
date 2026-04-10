@@ -90,6 +90,10 @@ class HOMEConfig:
     direct_device_access: bool = False
     # Maximum number of concurrent HOME processes
     max_processes: int = 64
+    # Boot device label (empty = internal storage, or e.g. "/sdcard/aura" for SD-card boot)
+    # When set, home_dir is overridden with this path so the entire HOME filesystem
+    # lives on the specified device — enabling SD-card or external-storage boot.
+    boot_device: str = ""
 
 
 @dataclass
@@ -175,6 +179,16 @@ class AURaConfig:
         config.root.root_secret = os.getenv("AURA_ROOT_SECRET", config.root.root_secret)
         config.build.signing_secret = os.getenv("AURA_BUILD_SECRET", config.build.signing_secret)
         config.compute.default_backend = os.getenv("AURA_COMPUTE_BACKEND", config.compute.default_backend)
+        # SD-card / external-device boot: AURA_BOOT_DEVICE overrides home_dir
+        boot_dev = os.getenv("AURA_BOOT_DEVICE", "")
+        if boot_dev:
+            config.home.boot_device = boot_dev
+            config.home.home_dir = os.path.normpath(os.path.expanduser(boot_dev))
+        else:
+            # Allow direct home_dir override without boot_device label
+            config.home.home_dir = os.path.normpath(
+                os.path.expanduser(os.getenv("AURA_HOME_DIR", config.home.home_dir))
+            )
         return config
 
 

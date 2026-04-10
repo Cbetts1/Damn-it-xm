@@ -120,6 +120,30 @@ class HomeFilesystem:
         with open(full, "w", encoding="utf-8") as fh:
             fh.write(content)
 
+    def delete(self, *parts: str) -> bool:
+        """
+        Delete a file or directory within HOME.
+
+        Returns ``True`` if the path existed and was removed, ``False``
+        if it did not exist.
+
+        Raises
+        ------
+        ValueError
+            On path-traversal attempts.
+        OSError
+            If the underlying remove operation fails.
+        """
+        full = self.path(*parts)
+        if not os.path.exists(full):
+            return False
+        if os.path.isdir(full):
+            shutil.rmtree(full)
+        else:
+            os.remove(full)
+        _logger.info("HomeFilesystem: deleted %s", full)
+        return True
+
     def metrics(self) -> dict:
         try:
             total, used, free = shutil.disk_usage(self._base)

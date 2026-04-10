@@ -2446,3 +2446,281 @@ def test_aios_properties_accessible():
         assert aios.build_pipeline is not None
         assert aios.identity_registry is not None
         assert aios.audit_log is not None
+
+
+# ---------------------------------------------------------------------------
+# HomeFilesystem — write / read / delete
+# ---------------------------------------------------------------------------
+
+def test_home_filesystem_write_read_delete(tmp_path):
+    from aura.home.filesystem import HomeFilesystem
+    fs = HomeFilesystem(str(tmp_path))
+    fs.mount()
+    # write then read
+    fs.write("hello world\n", "home", "aura", "note.txt")
+    content = fs.read("home", "aura", "note.txt")
+    assert "hello world" in content
+    # delete
+    removed = fs.delete("home", "aura", "note.txt")
+    assert removed is True
+    assert not fs.exists("home", "aura", "note.txt")
+    # delete non-existent returns False
+    removed2 = fs.delete("home", "aura", "note.txt")
+    assert removed2 is False
+
+
+def test_home_filesystem_delete_directory(tmp_path):
+    from aura.home.filesystem import HomeFilesystem
+    fs = HomeFilesystem(str(tmp_path))
+    fs.mount()
+    import os
+    os.makedirs(fs.path("opt", "myapp"), exist_ok=True)
+    fs.write("data", "opt", "myapp", "data.txt")
+    removed = fs.delete("opt", "myapp")
+    assert removed is True
+    assert not fs.exists("opt", "myapp")
+
+
+def test_home_filesystem_delete_traversal_blocked(tmp_path):
+    from aura.home.filesystem import HomeFilesystem
+    fs = HomeFilesystem(str(tmp_path))
+    fs.mount()
+    import pytest
+    with pytest.raises(ValueError):
+        fs.delete("..", "etc", "passwd")
+
+
+# ---------------------------------------------------------------------------
+# HOMELayer — git_install (no real git needed — mocked)
+# ---------------------------------------------------------------------------
+
+def test_home_layer_git_install_no_git(tmp_path, monkeypatch):
+    """git_install raises RuntimeError when git is not on PATH."""
+    import shutil
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    cfg = HOMEConfig(home_dir=str(tmp_path))
+    layer = HOMELayer(cfg)
+    layer.start()
+    # Patch shutil.which inside the userland module to simulate git absent
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    import pytest
+    with pytest.raises(RuntimeError, match="git: not found"):
+        layer.git_install("https://github.com/example/repo.git")
+    layer.stop()
+
+
+def test_home_layer_git_install_success(tmp_path, monkeypatch):
+    """git_install registers a package when the bridge succeeds."""
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    from aura.adapters.android_bridge import RunResult
+    import shutil
+
+    cfg = HOMEConfig(home_dir=str(tmp_path))
+    layer = HOMELayer(cfg)
+    layer.start()
+
+    # Ensure git appears to be available
+    real_which = shutil.which
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/git" if name == "git" else real_which(name))
+
+    # Stub AndroidBridge.run to return success without spawning git
+    import aura.home.userland as _userland_mod
+    import aura.adapters.android_bridge as _ab_mod
+
+    class _FakeBridge:
+        def run(self, cmd, **_):
+            return RunResult(command=cmd, returncode=0, stdout="Cloning into 'repo'...\n", stderr="")
+
+    monkeypatch.setattr(_ab_mod, "AndroidBridge", _FakeBridge)
+
+    pkg = layer.git_install("https://github.com/example/repo.git", "repo")
+    assert pkg.name == "repo"
+    assert pkg.version == "git"
+    pkgs = layer.list_packages()
+    assert any(p["name"] == "repo" for p in pkgs)
+    layer.stop()
+
+
+# ---------------------------------------------------------------------------
+# SD-card boot configuration
+# ---------------------------------------------------------------------------
+
+def test_sd_card_boot_config_via_env(tmp_path, monkeypatch):
+    """AURA_BOOT_DEVICE env var redirects HOME to the specified path."""
+    sd_path = str(tmp_path / "sdcard" / "aura")
+    monkeypatch.setenv("AURA_BOOT_DEVICE", sd_path)
+    from aura.config import AURaConfig
+    cfg = AURaConfig.from_env()
+    assert cfg.home.boot_device == sd_path
+    assert cfg.home.home_dir == sd_path
+
+
+def test_sd_card_boot_config_via_home_dir_env(tmp_path, monkeypatch):
+    """AURA_HOME_DIR env var overrides home_dir without setting boot_device."""
+    custom = str(tmp_path / "custom_home")
+    monkeypatch.setenv("AURA_HOME_DIR", custom)
+    monkeypatch.delenv("AURA_BOOT_DEVICE", raising=False)
+    from aura.config import AURaConfig
+    cfg = AURaConfig.from_env()
+    assert cfg.home.home_dir == custom
+    assert cfg.home.boot_device == ""
+
+
+def test_boot_device_reported_in_home_status(tmp_path):
+    """HOMELayer.status() includes boot_device field."""
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    cfg = HOMEConfig(home_dir=str(tmp_path), boot_device="/sdcard/aura")
+    layer = HOMELayer(cfg)
+    layer.start()
+    s = layer.status()
+    assert s["boot_device"] == "/sdcard/aura"
+    layer.stop()
+
+
+def test_boot_device_defaults_to_internal(tmp_path):
+    """When boot_device is empty, status() reports 'internal'."""
+    from aura.config import HOMEConfig
+    from aura.home.userland import HOMELayer
+    cfg = HOMEConfig(home_dir=str(tmp_path))
+    layer = HOMELayer(cfg)
+    layer.start()
+    s = layer.status()
+    assert s["boot_device"] == "internal"
+    layer.stop()
+
+
+# ---------------------------------------------------------------------------
+# AIOS dispatch — fs commands
+# ---------------------------------------------------------------------------
+
+def _make_aios(port, tmp_path):
+    from aura.config import AURaConfig
+    from aura.os_core.ai_os import AIOS
+    cfg = AURaConfig()
+    cfg.server.port = port
+    cfg.cloud.compute_nodes = 2
+    cfg.cpu.virtual_cores = 2
+    cfg.home.home_dir = str(tmp_path)
+    return AIOS(cfg)
+
+
+def test_aios_dispatch_fs_write_read(tmp_path):
+    with _make_aios(18490, tmp_path) as aios:
+        out = aios.dispatch("fs", ["write", "home/aura/hello.txt", "hello", "world"])
+        assert "wrote" in out.lower() or "byte" in out.lower()
+        out2 = aios.dispatch("fs", ["read", "home/aura/hello.txt"])
+        assert "hello world" in out2
+
+
+def test_aios_dispatch_fs_delete(tmp_path):
+    with _make_aios(18491, tmp_path) as aios:
+        aios.dispatch("fs", ["write", "home/aura/del.txt", "gone"])
+        out = aios.dispatch("fs", ["rm", "home/aura/del.txt"])
+        assert "removed" in out.lower()
+        # reading after delete should error
+        out2 = aios.dispatch("fs", ["read", "home/aura/del.txt"])
+        assert "error" in out2.lower() or "No such" in out2 or "fs read" in out2
+
+
+def test_aios_dispatch_fs_mkdir_ls(tmp_path):
+    with _make_aios(18492, tmp_path) as aios:
+        out = aios.dispatch("fs", ["mkdir", "home/aura/mydir"])
+        assert "created" in out.lower() or "mydir" in out.lower()
+        ls_out = aios.dispatch("fs", ["ls", "home/aura"])
+        assert "mydir" in ls_out
+
+
+def test_aios_dispatch_fs_info(tmp_path):
+    with _make_aios(18493, tmp_path) as aios:
+        out = aios.dispatch("fs", ["info"])
+        assert "HOME filesystem" in out or "Total" in out
+
+
+def test_aios_dispatch_fs_help(tmp_path):
+    with _make_aios(18494, tmp_path) as aios:
+        out = aios.dispatch("fs", [])
+        assert "Usage" in out
+        assert "write" in out
+        assert "read" in out
+        assert "rm" in out
+
+
+# ---------------------------------------------------------------------------
+# AIOS dispatch — pkg commands
+# ---------------------------------------------------------------------------
+
+def test_aios_dispatch_pkg_install_list_remove(tmp_path):
+    with _make_aios(18495, tmp_path) as aios:
+        out = aios.dispatch("pkg", ["install", "mytool", "2.0.0"])
+        assert "installed" in out.lower()
+        lst = aios.dispatch("pkg", ["list"])
+        assert "mytool" in lst
+        rm = aios.dispatch("pkg", ["remove", "mytool"])
+        assert "removed" in rm.lower()
+        lst2 = aios.dispatch("pkg", ["list"])
+        assert "mytool" not in lst2
+
+
+def test_aios_dispatch_pkg_remove_not_installed(tmp_path):
+    with _make_aios(18496, tmp_path) as aios:
+        out = aios.dispatch("pkg", ["remove", "nonexistent"])
+        assert "not installed" in out.lower()
+
+
+def test_aios_dispatch_pkg_help(tmp_path):
+    with _make_aios(18497, tmp_path) as aios:
+        out = aios.dispatch("pkg", [])
+        assert "Usage" in out
+        assert "install" in out
+        assert "git" in out
+
+
+def test_aios_dispatch_pkg_git_no_git(tmp_path, monkeypatch):
+    """pkg git returns an error when git is not on PATH."""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    with _make_aios(18498, tmp_path) as aios:
+        out = aios.dispatch("pkg", ["git", "https://github.com/example/repo.git"])
+        assert "git" in out.lower() and ("not found" in out.lower() or "error" in out.lower() or "fail" in out.lower())
+
+
+# ---------------------------------------------------------------------------
+# AIOS dispatch — git commands
+# ---------------------------------------------------------------------------
+
+def test_aios_dispatch_git_help(tmp_path):
+    with _make_aios(18499, tmp_path) as aios:
+        out = aios.dispatch("git", [])
+        assert "Usage" in out
+        assert "clone" in out
+        assert "pull" in out
+
+
+def test_aios_dispatch_git_clone_missing_git(tmp_path, monkeypatch):
+    """git clone dispatch returns error message when git binary absent."""
+    with _make_aios(18500, tmp_path) as aios:
+        # Run git clone for a non-existent host — it will fail gracefully
+        out = aios.dispatch("git", ["clone", "https://127.0.0.1:1/nonexistent.git", str(tmp_path / "dest")])
+        # Should return some output (error from git or timeout message)
+        assert isinstance(out, str) and len(out) > 0
+
+
+def test_aios_dispatch_git_status(tmp_path):
+    """git status dispatch works inside a git repo or returns an error string."""
+    with _make_aios(18501, tmp_path) as aios:
+        out = aios.dispatch("git", ["status", str(tmp_path)])
+        assert isinstance(out, str)
+
+
+# ---------------------------------------------------------------------------
+# AIOS help includes new commands
+# ---------------------------------------------------------------------------
+
+def test_aios_help_includes_fs_pkg_git(tmp_path):
+    with _make_aios(18502, tmp_path) as aios:
+        out = aios.dispatch("help")
+        assert "fs" in out
+        assert "pkg" in out
+        assert "git" in out

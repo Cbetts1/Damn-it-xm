@@ -800,6 +800,9 @@ class AIOS:
                 "  vram          — virtual RAM device status\n"
                 "  vdisk         — virtual disk device status\n"
                 "  home          — HOME userland status\n"
+                "  fs …          — HOME filesystem (ls/mkdir/write/read/rm/info)\n"
+                "  pkg …         — package manager (list/install/remove/git)\n"
+                "  git …         — git operations (clone/pull/status)\n"
                 "  build …       — build pipeline (run/list/approve/reject)\n"
                 "  identity      — identity registry status\n"
                 "  audit         — recent audit log entries\n"
@@ -911,11 +914,162 @@ class AIOS:
             lines = [
                 "── HOME Userland ───────────────────────────────────",
                 f"  Running        : {s['running']}",
+                f"  Boot device    : {s['boot_device']}",
                 f"  Home dir       : {s['home_dir']}",
                 f"  Packages       : {s['packages']}",
                 f"  Processes      : {s['processes']}",
             ]
             return "\n".join(lines)
+
+        elif cmd == "fs":
+            if self._home is None:
+                return "fs: HOME layer not initialised"
+            fs = self._home.filesystem
+            sub = args[0].lower() if args else ""
+            if sub in ("ls", "list", "dir"):
+                rel = args[1] if len(args) > 1 else ""
+                try:
+                    parts_path = [rel] if rel else []
+                    entries = fs.ls(*parts_path) if parts_path else fs.ls()
+                    return "\n".join(entries) if entries else "(empty)"
+                except (ValueError, OSError) as exc:
+                    return f"fs ls: {exc}"
+            elif sub == "mkdir":
+                if len(args) < 2:
+                    return "Usage: fs mkdir <path>"
+                try:
+                    os.makedirs(fs.path(args[1]), exist_ok=True)
+                    return f"fs: created {args[1]}"
+                except (ValueError, OSError) as exc:
+                    return f"fs mkdir: {exc}"
+            elif sub in ("write", "mkfile"):
+                if len(args) < 3:
+                    return "Usage: fs write <path> <content>"
+                content = " ".join(args[2:])
+                try:
+                    fs.write(content, args[1])
+                    return f"fs: wrote {len(content)} bytes to {args[1]}"
+                except (ValueError, OSError) as exc:
+                    return f"fs write: {exc}"
+            elif sub in ("read", "cat"):
+                if len(args) < 2:
+                    return "Usage: fs read <path>"
+                try:
+                    return fs.read(args[1])
+                except (ValueError, OSError) as exc:
+                    return f"fs read: {exc}"
+            elif sub in ("rm", "del", "delete"):
+                if len(args) < 2:
+                    return "Usage: fs rm <path>"
+                try:
+                    removed = fs.delete(args[1])
+                    return f"fs: removed {args[1]}" if removed else f"fs: {args[1]} not found"
+                except (ValueError, OSError) as exc:
+                    return f"fs rm: {exc}"
+            elif sub == "info":
+                m = fs.metrics()
+                total = m["disk_total_bytes"]
+                used = m["disk_used_bytes"]
+                free = m["disk_free_bytes"]
+                pct = (used / total * 100) if total else 0
+                return (
+                    f"HOME filesystem: {m['base_dir']}\n"
+                    f"  Total : {total // (1024**3):.1f} GB\n"
+                    f"  Used  : {used // (1024**2):.0f} MB  ({pct:.1f}%)\n"
+                    f"  Free  : {free // (1024**2):.0f} MB"
+                )
+            else:
+                return (
+                    "Usage:\n"
+                    "  fs ls [path]            — list directory\n"
+                    "  fs mkdir <path>         — create directory\n"
+                    "  fs write <path> <text>  — write/overwrite a file\n"
+                    "  fs read <path>          — read a file\n"
+                    "  fs rm <path>            — delete a file or directory\n"
+                    "  fs info                 — filesystem disk usage"
+                )
+
+        elif cmd == "pkg":
+            if self._home is None:
+                return "pkg: HOME layer not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "list":
+                pkgs = self._home.list_packages()
+                if not pkgs:
+                    return "pkg: no packages installed"
+                lines = [f"Installed packages ({len(pkgs)}):"]
+                for p in pkgs:
+                    lines.append(f"  {p['name']:<20} {p['version']:<12} {p['description']}")
+                return "\n".join(lines)
+            elif sub == "install" and len(args) >= 2:
+                name = args[1]
+                version = args[2] if len(args) > 2 else "1.0.0"
+                desc = " ".join(args[3:]) if len(args) > 3 else ""
+                pkg = self._home.install_package(name, version, desc)
+                return f"pkg: installed {pkg.name} {pkg.version}"
+            elif sub == "remove" and len(args) >= 2:
+                name = args[1]
+                removed = self._home.remove_package(name)
+                return f"pkg: removed {name}" if removed else f"pkg: {name} not installed"
+            elif sub == "git" and len(args) >= 2:
+                url = args[1]
+                name = args[2] if len(args) > 2 else None
+                try:
+                    pkg = self._home.git_install(url, name)
+                    return f"pkg: git installed {pkg.name} from {url}"
+                except (RuntimeError, OSError) as exc:
+                    return f"pkg git: {exc}"
+            else:
+                return (
+                    "Usage:\n"
+                    "  pkg list                       — list installed packages\n"
+                    "  pkg install <name> [version]   — register/install a package\n"
+                    "  pkg remove <name>              — uninstall a package\n"
+                    "  pkg git <url> [name]           — clone & install a git package"
+                )
+
+        elif cmd == "git":
+            if self._bridge is None:
+                return "git: platform bridge not initialised"
+            sub = args[0].lower() if args else ""
+            if sub == "clone" and len(args) >= 2:
+                url = args[1]
+                dest = args[2] if len(args) > 2 else None
+                git_args = ["git", "clone", "--", url]
+                if dest:
+                    git_args.append(dest)
+                result = self._bridge.run(git_args, timeout=120)
+                out_parts = []
+                if result.stdout:
+                    out_parts.append(result.stdout.rstrip())
+                if result.stderr:
+                    out_parts.append(result.stderr.rstrip())
+                return "\n".join(out_parts) if out_parts else (
+                    f"git: cloned {url}" if result.success else f"git: clone failed (rc={result.returncode})"
+                )
+            elif sub == "pull":
+                directory = args[1] if len(args) > 1 else None
+                pull_args = ["git", "pull"]
+                result = self._bridge.run(pull_args, cwd=directory, timeout=60)
+                out_parts = []
+                if result.stdout:
+                    out_parts.append(result.stdout.rstrip())
+                if result.stderr:
+                    out_parts.append(result.stderr.rstrip())
+                return "\n".join(out_parts) if out_parts else (
+                    "git: pull complete" if result.success else f"git: pull failed (rc={result.returncode})"
+                )
+            elif sub == "status":
+                directory = args[1] if len(args) > 1 else None
+                result = self._bridge.run(["git", "status", "--short"], cwd=directory, timeout=15)
+                return result.stdout.rstrip() or "git: working tree clean"
+            else:
+                return (
+                    "Usage:\n"
+                    "  git clone <url> [dir]  — clone a repository\n"
+                    "  git pull [dir]         — pull latest changes\n"
+                    "  git status [dir]       — show working tree status"
+                )
 
         elif cmd == "build":
             if self._build_pipeline is None:

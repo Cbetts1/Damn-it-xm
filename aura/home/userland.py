@@ -166,6 +166,78 @@ class HOMELayer:
         with self._lock:
             return [p.to_dict() for p in self._packages.values()]
 
+    def git_install(
+        self,
+        url: str,
+        name: Optional[str] = None,
+        *,
+        branch: Optional[str] = None,
+    ) -> HomePackage:
+        """
+        Clone a git repository into ``HOME/opt/<name>`` and register it as a
+        package.
+
+        Parameters
+        ----------
+        url:
+            Git remote URL (https or ssh).
+        name:
+            Package name / destination directory under ``HOME/opt/``.
+            Defaults to the last component of *url* with ``.git`` stripped.
+        branch:
+            Branch to clone (omit for default branch).
+
+        Returns
+        -------
+        :class:`HomePackage`
+            The newly registered package.
+
+        Raises
+        ------
+        RuntimeError
+            If the ``git`` executable is not available on ``PATH``.
+        OSError
+            If the clone fails (non-zero exit from git).
+        """
+        import shutil as _shutil
+
+        if not _shutil.which("git"):
+            raise RuntimeError("git: not found on PATH — install git first")
+
+        if not name:
+            name = url.rstrip("/").split("/")[-1]
+            if name.endswith(".git"):
+                name = name[:-4]
+
+        dest = self._fs.path("opt", name)
+
+        from aura.adapters.android_bridge import AndroidBridge
+        bridge = AndroidBridge()
+
+        if os.path.isdir(os.path.join(dest, ".git")):
+            # Already cloned — pull instead
+            result = bridge.run(["git", "-C", dest, "pull"], timeout=60)
+            action = "pulled"
+        else:
+            cmd = ["git", "clone"]
+            if branch:
+                cmd += ["--branch", branch]
+            cmd += ["--", url, dest]
+            result = bridge.run(cmd, timeout=120)
+            action = "cloned"
+
+        if not result.success:
+            raise OSError(
+                f"git {action} failed (rc={result.returncode}): {result.stderr}"
+            )
+
+        _logger.info("HOME: git %s %s → %s", action, url, dest)
+        return self.install_package(
+            name=name,
+            version="git",
+            description=f"git:{url}",
+        )
+
     # ------------------------------------------------------------------
     # Process tracking
     # ------------------------------------------------------------------
@@ -204,6 +276,7 @@ class HOMELayer:
             return {
                 "running": self._running,
                 "home_dir": self._config.home_dir,
+                "boot_device": self._config.boot_device or "internal",
                 "packages": len(self._packages),
                 "processes": len([p for p in self._processes.values()
                                   if p.state == "running"]),

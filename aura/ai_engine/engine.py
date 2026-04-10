@@ -336,6 +336,30 @@ _BACKEND_REGISTRY: dict = {
     "openai_compatible": OpenAICompatibleBackend,
 }
 
+# Register the Ollama backend lazily so importing this module never hard-fails
+# even when aura.ai_engine.ollama_backend has a problem.
+def _register_ollama_backend() -> None:
+    # OllamaBackend takes OllamaConfig, not AIEngineConfig — wrap it
+    class _OllamaAdaptor(BaseBackend):
+        """Thin adaptor so OllamaBackend works through the standard registry."""
+        def __init__(self, config: AIEngineConfig) -> None:
+            from aura.config import OllamaConfig
+            from aura.ai_engine.ollama_backend import OllamaBackend as _OB
+            ocfg = OllamaConfig(
+                base_url=config.api_base_url or "http://localhost:11434",
+                model=config.model_name if config.model_name != "aura-assistant" else "llama3.1:8b",
+            )
+            self._inner = _OB(ocfg)
+        def is_ready(self) -> bool:
+            return self._inner.is_ready()
+        def generate(self, prompt: str, system_prompt: str = "", **kwargs) -> "AIResponse":
+            return self._inner.generate(prompt, system_prompt=system_prompt, **kwargs)
+        def stream(self, prompt: str, system_prompt: str = "", **kwargs):
+            yield from self._inner.stream(prompt, system_prompt=system_prompt, **kwargs)
+    _BACKEND_REGISTRY["ollama"] = _OllamaAdaptor
+
+_register_ollama_backend()
+
 
 def register_backend(name: str, cls: type) -> None:
     """Register a custom AI backend under *name* in the global registry.

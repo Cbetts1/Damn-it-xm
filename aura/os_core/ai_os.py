@@ -79,6 +79,8 @@ from aura.web.ws import WebSocketHub
 # v2.0.0 AI engine enhancements
 from aura.ai_engine.model_registry import ModelRegistry
 from aura.ai_engine.personality_kernel import PersonalityKernel
+from aura.ai_engine.ollama_backend import OllamaBackend
+from aura.cloud.cloud_ai_router import CloudAIRouter
 
 # v2.0.0 mirror + intelligence index + branding
 from aura.command_center.mirror import MirrorService
@@ -176,6 +178,9 @@ class AIOS:
         # v2.0.0 AI engine enhancements
         self._model_registry: Optional[ModelRegistry] = None
         self._personality_kernel: Optional[PersonalityKernel] = None
+
+        # Cloud AI router — routes inference through VirtualCPU/VirtualCloud
+        self._cloud_ai_router: Optional[CloudAIRouter] = None
 
         # v2.0.0 mirror + intelligence index
         self._mirror: Optional[MirrorService] = None
@@ -377,6 +382,11 @@ class AIOS:
     def intelligence_index(self) -> IntelligenceIndex:
         assert self._intelligence_index is not None, "AIOS not started"
         return self._intelligence_index
+
+    @property
+    def cloud_ai_router(self) -> CloudAIRouter:
+        assert self._cloud_ai_router is not None, "AIOS not started"
+        return self._cloud_ai_router
 
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
@@ -675,6 +685,21 @@ class AIOS:
             backend=self._config.ai_engine.backend,
         )
 
+        # Cloud AI Router — routes inference through VirtualCPU/VirtualCloud so
+        # model weights never load into the device's main Python process.
+        self._logger.info(
+            "[+] Wiring Cloud AI Router (model=%s, url=%s)…",
+            self._config.ollama.model,
+            self._config.ollama.base_url,
+        )
+        _ollama_backend = OllamaBackend(self._config.ollama)
+        self._cloud_ai_router = CloudAIRouter(
+            virtual_cpu=self._cpu,
+            virtual_cloud=self._cloud,
+            backend=_ollama_backend,
+            ollama_config=self._config.ollama,
+        )
+
         # Restore persisted state (history, extra models)
         self._load_state()
 
@@ -692,6 +717,12 @@ class AIOS:
         self._logger.info("  FS        : vfs, procfs, fhs")
         self._logger.info("  Pkg       : registry + installer")
         self._logger.info("  Web       : api + websocket hub")
+        self._logger.info(
+            "  Cloud AI  : %s @ %s (router=%s)",
+            self._config.ollama.model,
+            self._config.ollama.base_url,
+            "enabled" if self._config.ollama.use_cloud_router else "disabled",
+        )
         self._logger.info("=" * 60)
 
         EVENT_BUS.publish("aios.started", {"version": self.VERSION})
@@ -711,6 +742,8 @@ class AIOS:
             self._audit_log.flush_to_disk()
         if self._server:
             self._server.stop()
+        if self._cloud_ai_router:
+            self._cloud_ai_router.shutdown()
         if self._cpu:
             self._cpu.stop()
         # Unmount HOME and stop ROOT
@@ -802,6 +835,7 @@ class AIOS:
             "mirror": {
                 "count": len(self._mirror.list_mirrors()) if self._mirror else 0,
             },
+            "cloud_ai_router": self._cloud_ai_router.metrics() if self._cloud_ai_router else {},
             "timestamp": utcnow(),
         }
 
@@ -883,6 +917,85 @@ class AIOS:
                 return "Usage: ask <your question>"
             resp = self.ai_engine.ask(query)
             return resp.text
+
+        elif cmd in ("cloud-ai", "cloudai"):
+            sub = args[0].lower() if args else "status"
+            rest = args[1:] if len(args) > 1 else []
+
+            if sub == "status":
+                info = self._cloud_ai_router.backend_info() if self._cloud_ai_router else {}
+                m = self._cloud_ai_router.metrics() if self._cloud_ai_router else {}
+                lines = [
+                    "── Cloud AI Router ──────────────────────────",
+                    f"  Backend    : {info.get('backend_class', '?')}",
+                    f"  Model      : {info.get('model_name', '?')}",
+                    f"  Server URL : {info.get('base_url', '?')}",
+                    f"  Ready      : {'✅ Yes' if info.get('is_ready') else '❌ No (Ollama not running)'}",
+                    f"  Server ver : {info.get('server_version') or 'n/a'}",
+                    f"  Cloud rtr  : {'enabled' if m.get('cloud_router_enabled') else 'disabled'}",
+                    f"  Queries    : {m.get('queries_routed', 0)} routed / "
+                    f"{m.get('queries_completed', 0)} done / {m.get('queries_failed', 0)} failed",
+                    f"  Uptime     : {m.get('uptime_seconds', 0):.0f}s",
+                    "",
+                    "  To start Ollama:  ollama serve",
+                    f"  To pull model:    aura cloud-ai pull",
+                    f"  To ask via cloud: aura cloud-ai ask <question>",
+                ]
+                return "\n".join(lines)
+
+            elif sub == "ask":
+                query = " ".join(rest) if rest else ""
+                if not query:
+                    return "Usage: cloud-ai ask <your question>"
+                if self._cloud_ai_router is None:
+                    return "Cloud AI Router not initialised."
+                resp = self._cloud_ai_router.route(query)
+                return resp.text
+
+            elif sub == "pull":
+                model = rest[0] if rest else None
+                if self._cloud_ai_router is None:
+                    return "Cloud AI Router not initialised."
+                target = model or self._config.ollama.model
+                ok = self._cloud_ai_router.pull_model(model)
+                if ok:
+                    return (
+                        f"Pull task submitted for model '{target}'.\n"
+                        "This runs in the background — check progress with: aura tasks"
+                    )
+                return f"Failed to submit pull task for '{target}'."
+
+            elif sub == "models":
+                models = self._cloud_ai_router.list_cloud_models() if self._cloud_ai_router else []
+                if not models:
+                    return "No AI models registered in the Virtual Cloud."
+                lines = ["Virtual Cloud AI Models:"]
+                for m in models:
+                    lines.append(f"  • {m['model_name']}  [{m['backend']}]  {m['size_human']}")
+                return "\n".join(lines)
+
+            elif sub == "list":
+                # List models available on the Ollama server
+                if self._cloud_ai_router is None:
+                    return "Cloud AI Router not initialised."
+                b = self._cloud_ai_router._backend
+                if hasattr(b, "list_models"):
+                    ollama_models = b.list_models()
+                    if not ollama_models:
+                        return "No models found on Ollama server (is it running?)"
+                    lines = ["Models on Ollama server:"]
+                    for m in ollama_models:
+                        name = m.get("name", "?")
+                        size = m.get("size", 0)
+                        from aura.utils import format_bytes
+                        lines.append(f"  • {name}  {format_bytes(size)}")
+                    return "\n".join(lines)
+                return "list not supported by current backend."
+
+            else:
+                return (
+                    "cloud-ai sub-commands: status | ask <q> | pull [model] | models | list"
+                )
 
         elif cmd == "models":
             models = self.cloud.list_models()
@@ -1028,7 +1141,12 @@ class AIOS:
                 "  nodes         — list cloud compute nodes\n"
                 "  models        — list registered AI models\n"
                 "  tasks         — list CPU tasks\n"
-                "  ask <query>   — query the AI engine\n"
+                "  ask <query>   — query the AI engine (builtin/transformers)\n"
+                "  cloud-ai status           — Cloud AI Router status\n"
+                "  cloud-ai ask <question>   — ask the large cloud AI model\n"
+                "  cloud-ai pull [model]     — download model to virtual cloud\n"
+                "  cloud-ai models           — list models in virtual cloud\n"
+                "  cloud-ai list             — list models on Ollama server\n"
                 "  plan <task>   — AI-generated task execution plan\n"
                 "  analyse       — AI analysis of current metrics\n"
                 "  history       — show conversation history\n"

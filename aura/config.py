@@ -171,6 +171,26 @@ class PkgConfig:
 
 
 @dataclass
+class OllamaConfig:
+    """Ollama large-model server configuration.
+
+    Ollama runs as a local server process, keeping heavy model weights
+    **out of the phone's RAM** and inside the virtual cloud / CPU layer.
+    """
+    # Base URL of the Ollama REST API (default: local)
+    base_url: str = "http://localhost:11434"
+    # Default model to use.  llama3.1:8b is the largest capable model
+    # that runs on commodity hardware without a GPU.
+    model: str = "llama3.1:8b"
+    # Hard timeout for a single generate request (seconds)
+    timeout_seconds: int = 120
+    # Whether to route every inference call through the VirtualCPU task queue
+    use_cloud_router: bool = True
+    # Directory inside the virtual cloud model cache where Ollama models live
+    model_store_subdir: str = "ollama"
+
+
+@dataclass
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
@@ -195,6 +215,7 @@ class AURaConfig:
     kernel: KernelConfig = field(default_factory=KernelConfig)
     web: WebConfig = field(default_factory=WebConfig)
     pkg: PkgConfig = field(default_factory=PkgConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
     @classmethod
     def from_env(cls) -> "AURaConfig":
@@ -215,6 +236,9 @@ class AURaConfig:
         config.root.root_secret = os.getenv("AURA_ROOT_SECRET", config.root.root_secret)
         config.build.signing_secret = os.getenv("AURA_BUILD_SECRET", config.build.signing_secret)
         config.compute.default_backend = os.getenv("AURA_COMPUTE_BACKEND", config.compute.default_backend)
+        config.ollama.base_url = os.getenv("AURA_OLLAMA_URL", config.ollama.base_url)
+        config.ollama.model = os.getenv("AURA_OLLAMA_MODEL", config.ollama.model)
+        config.ollama.use_cloud_router = os.getenv("AURA_OLLAMA_CLOUD_ROUTER", "true").lower() != "false"
         # SD-card / external-device boot: AURA_BOOT_DEVICE overrides home_dir
         boot_dev = os.getenv("AURA_BOOT_DEVICE", "")
         if boot_dev:

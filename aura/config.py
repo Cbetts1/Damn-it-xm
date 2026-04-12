@@ -191,6 +191,50 @@ class OllamaConfig:
 
 
 @dataclass
+class VNodeConfig:
+    """Virtual Network Node configuration.
+
+    Each AURa installation is a virtual node in a larger mesh of repos.
+    The node registers itself with a Command Center and participates in
+    a virtual cluster for orchestration and state sync.
+    """
+    # Human-readable name for this node (override via AURA_NODE_NAME)
+    node_name: str = "aura-node"
+    # URL of the Command Center.  Empty = standalone mode (no registration)
+    command_center_url: str = ""
+    # How often the node sends a heartbeat to the Command Center (seconds)
+    heartbeat_interval_seconds: float = 30.0
+    # HTTP request timeout for Command Center calls (seconds)
+    timeout_seconds: int = 5
+    # File to persist the stable node UUID across restarts
+    node_id_file: str = os.path.join(os.path.expanduser("~"), ".aura", "node_id")
+
+
+@dataclass
+class RemoteConfig:
+    """Remote TCP/HTTP control server configuration.
+
+    A real HTTP server (Python built-in, no extra deps) that exposes the
+    AURa WebAPI over a Termux-safe port (>1024, no root required).
+    """
+    # Whether the remote control server is enabled
+    enabled: bool = False
+    # Bind address (0.0.0.0 = all interfaces)
+    host: str = "0.0.0.0"
+    # Listening port.  8765 is the default Termux-safe port for AURa remote
+    port: int = 8765
+    # When set, all requests must carry a matching Bearer token
+    auth_token: Optional[str] = None
+
+
+@dataclass
+class BuilderConfig:
+    """Builder/self-expansion engine configuration."""
+    # Directory where auto-generated modules and scripts are written
+    output_dir: str = os.path.join(os.path.expanduser("~"), ".aura", "builder")
+
+
+@dataclass
 class AURaConfig:
     """Top-level AURa system configuration."""
     system_name: str = "AURa"
@@ -217,6 +261,11 @@ class AURaConfig:
     pkg: PkgConfig = field(default_factory=PkgConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
+    # v2.1.0 virtual network node + remote + builder
+    vnode: VNodeConfig = field(default_factory=VNodeConfig)
+    remote: RemoteConfig = field(default_factory=RemoteConfig)
+    builder: BuilderConfig = field(default_factory=BuilderConfig)
+
     @classmethod
     def from_env(cls) -> "AURaConfig":
         """Load configuration from environment variables."""
@@ -239,6 +288,21 @@ class AURaConfig:
         config.ollama.base_url = os.getenv("AURA_OLLAMA_URL", config.ollama.base_url)
         config.ollama.model = os.getenv("AURA_OLLAMA_MODEL", config.ollama.model)
         config.ollama.use_cloud_router = os.getenv("AURA_OLLAMA_CLOUD_ROUTER", "true").lower() != "false"
+        # Virtual node settings
+        config.vnode.node_name = os.getenv("AURA_NODE_NAME", config.vnode.node_name)
+        config.vnode.command_center_url = os.getenv("AURA_COMMAND_CENTER_URL", config.vnode.command_center_url)
+        config.vnode.heartbeat_interval_seconds = float(
+            os.getenv("AURA_HEARTBEAT_INTERVAL", str(config.vnode.heartbeat_interval_seconds))
+        )
+        # Remote control server settings
+        config.remote.enabled = os.getenv("AURA_REMOTE_ENABLED", "false").lower() == "true"
+        config.remote.host = os.getenv("AURA_REMOTE_HOST", config.remote.host)
+        config.remote.port = int(os.getenv("AURA_REMOTE_PORT", str(config.remote.port)))
+        config.remote.auth_token = os.getenv("AURA_REMOTE_TOKEN", config.remote.auth_token)
+        # Builder settings
+        config.builder.output_dir = os.path.normpath(
+            os.path.expanduser(os.getenv("AURA_BUILDER_DIR", config.builder.output_dir))
+        )
         # SD-card / external-device boot: AURA_BOOT_DEVICE overrides home_dir
         boot_dev = os.getenv("AURA_BOOT_DEVICE", "")
         if boot_dev:

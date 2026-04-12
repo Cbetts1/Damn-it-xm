@@ -4220,3 +4220,491 @@ def test_aios_metrics_includes_cloud_ai_router(tmp_path):
         m = aios.metrics()
         assert "cloud_ai_router" in m
         assert "backend" in m["cloud_ai_router"]
+
+
+# ---------------------------------------------------------------------------
+# VNode Identity
+# ---------------------------------------------------------------------------
+
+def test_vnode_identity_creates_node_id(tmp_path):
+    from aura.vnode.identity import VNodeIdentity
+    import uuid
+    v = VNodeIdentity(node_name="test-node")
+    assert v.node_id
+    try:
+        uuid.UUID(v.node_id)
+    except ValueError:
+        pytest.fail("node_id is not a valid UUID")
+
+
+def test_vnode_identity_properties():
+    from aura.vnode.identity import VNodeIdentity
+    v = VNodeIdentity(node_name="my-node")
+    assert v.node_name == "my-node"
+    assert isinstance(v.capabilities, list)
+    assert len(v.capabilities) >= 1
+    assert v.version == "2.0.0"
+    assert v.platform in ("termux/android", "linux", "unknown")
+    assert v.created_at
+
+
+def test_vnode_identity_to_dict():
+    from aura.vnode.identity import VNodeIdentity
+    v = VNodeIdentity()
+    d = v.to_dict()
+    assert "node_id" in d
+    assert "node_name" in d
+    assert "capabilities" in d
+    assert "version" in d
+    assert "platform" in d
+    assert "fingerprint" in d
+    assert "created_at" in d
+
+
+def test_vnode_identity_fingerprint_is_string():
+    from aura.vnode.identity import VNodeIdentity
+    v = VNodeIdentity()
+    fp = v.fingerprint()
+    assert isinstance(fp, str)
+    assert len(fp) == 64  # SHA-256 hex
+
+
+def test_vnode_identity_stable_across_instances(tmp_path):
+    """The node_id should be the same when read from disk on second boot."""
+    from aura.vnode.identity import _load_or_create_node_id
+    nid1 = _load_or_create_node_id()
+    nid2 = _load_or_create_node_id()
+    assert nid1 == nid2
+
+
+# ---------------------------------------------------------------------------
+# VNode Registry
+# ---------------------------------------------------------------------------
+
+def test_vnode_registry_not_registered_without_url():
+    from aura.vnode.identity import VNodeIdentity
+    from aura.vnode.registry import VNodeRegistry
+    v = VNodeIdentity()
+    r = VNodeRegistry(identity=v, command_center_url="")
+    ok = r.register()
+    assert ok is False
+    assert r.is_registered is False
+
+
+def test_vnode_registry_metrics():
+    from aura.vnode.identity import VNodeIdentity
+    from aura.vnode.registry import VNodeRegistry
+    v = VNodeIdentity()
+    r = VNodeRegistry(identity=v)
+    m = r.metrics()
+    assert "registration_status" in m
+    assert "command_center_url" in m
+
+
+def test_vnode_registry_graceful_failure_bad_url():
+    from aura.vnode.identity import VNodeIdentity
+    from aura.vnode.registry import VNodeRegistry
+    v = VNodeIdentity()
+    r = VNodeRegistry(identity=v, command_center_url="http://localhost:19999")
+    ok = r.register()
+    assert ok is False
+    assert r.is_registered is False
+
+
+# ---------------------------------------------------------------------------
+# HeartbeatService
+# ---------------------------------------------------------------------------
+
+def test_heartbeat_starts_and_stops():
+    from aura.vnode.identity import VNodeIdentity
+    from aura.vnode.heartbeat import HeartbeatService
+    v = VNodeIdentity()
+    hb = HeartbeatService(identity=v, command_center_url="", interval_seconds=0.1)
+    hb.start()
+    assert hb.is_running is True
+    hb.stop()
+    assert hb.is_running is False
+
+
+def test_heartbeat_metrics():
+    from aura.vnode.identity import VNodeIdentity
+    from aura.vnode.heartbeat import HeartbeatService
+    v = VNodeIdentity()
+    hb = HeartbeatService(identity=v)
+    m = hb.metrics()
+    assert "is_running" in m
+    assert "beat_count" in m
+    assert "interval_seconds" in m
+
+
+# ---------------------------------------------------------------------------
+# MeshBus
+# ---------------------------------------------------------------------------
+
+def test_mesh_bus_register_and_list_peers():
+    from aura.vnode.mesh import MeshBus
+    m = MeshBus()
+    m.register_peer("node-1", ["ai", "build"])
+    m.register_peer("node-2", ["metrics"])
+    peers = m.list_peers()
+    assert len(peers) == 2
+    node_ids = [p["node_id"] for p in peers]
+    assert "node-1" in node_ids
+    assert "node-2" in node_ids
+
+
+def test_mesh_bus_unregister_peer():
+    from aura.vnode.mesh import MeshBus
+    m = MeshBus()
+    m.register_peer("node-x", [])
+    assert m.unregister_peer("node-x") is True
+    assert m.unregister_peer("node-x") is False  # already gone
+    assert len(m.list_peers()) == 0
+
+
+def test_mesh_bus_send_and_receive():
+    from aura.vnode.mesh import MeshBus
+    m = MeshBus()
+    m.register_peer("alpha", [])
+    ok = m.send_to_peer("alpha", {"hello": "world"})
+    assert ok is True
+    msgs = m.receive("alpha")
+    assert len(msgs) == 1
+    assert msgs[0]["message"]["hello"] == "world"
+
+
+def test_mesh_bus_broadcast():
+    from aura.vnode.mesh import MeshBus
+    m = MeshBus()
+    m.register_peer("p1", ["news"])
+    m.register_peer("p2", ["news"])
+    m.register_peer("p3", [])
+    count = m.broadcast("news", {"headline": "test"})
+    # All peers with "news" capability receive the broadcast
+    assert count >= 2
+    msgs_p1 = m.receive("p1")
+    msgs_p2 = m.receive("p2")
+    assert any(msg["message"]["headline"] == "test" for msg in msgs_p1)
+    assert any(msg["message"]["headline"] == "test" for msg in msgs_p2)
+
+
+def test_mesh_bus_metrics():
+    from aura.vnode.mesh import MeshBus
+    m = MeshBus()
+    m.register_peer("n1", [])
+    m.send_to_peer("n1", {"x": 1})
+    met = m.metrics()
+    assert met["peer_count"] == 1
+    assert met["total_messages_sent"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# RemoteControlServer
+# ---------------------------------------------------------------------------
+
+def test_remote_server_starts_and_responds(tmp_path):
+    from aura.web.api import WebAPI
+    from aura.remote.server import RemoteControlServer
+    api = WebAPI()
+    srv = RemoteControlServer(api, host="127.0.0.1", port=19200)
+    srv.start()
+    try:
+        import urllib.request, json
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                resp = urllib.request.urlopen("http://127.0.0.1:19200/health", timeout=1)
+                data = json.loads(resp.read())
+                assert data["status"] == "ok"
+                break
+            except Exception:
+                time.sleep(0.1)
+        else:
+            pytest.fail("Remote server did not respond within 5 s")
+    finally:
+        srv.stop()
+
+
+def test_remote_server_metrics():
+    from aura.web.api import WebAPI
+    from aura.remote.server import RemoteControlServer
+    api = WebAPI()
+    srv = RemoteControlServer(api, host="127.0.0.1", port=19201)
+    srv.start()
+    try:
+        m = srv.metrics()
+        assert m["host"] == "127.0.0.1"
+        assert m["port"] == 19201
+        assert m["is_running"] is True
+        assert "requests_handled" in m
+    finally:
+        srv.stop()
+
+
+def test_remote_server_not_running_before_start():
+    from aura.web.api import WebAPI
+    from aura.remote.server import RemoteControlServer
+    api = WebAPI()
+    srv = RemoteControlServer(api, host="127.0.0.1", port=19202)
+    assert srv.is_running is False
+
+
+def test_remote_server_post_command():
+    from aura.web.api import WebAPI
+    from aura.remote.server import RemoteControlServer
+    import urllib.request, json
+    api = WebAPI()
+    srv = RemoteControlServer(api, host="127.0.0.1", port=19203)
+    srv.start()
+    try:
+        # Wait for server to be ready
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                urllib.request.urlopen("http://127.0.0.1:19203/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.1)
+        body = json.dumps({"command": "nonexistent"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:19203/command",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=2)
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# BuilderEngine
+# ---------------------------------------------------------------------------
+
+def test_builder_engine_generates_module(tmp_path):
+    from aura.builder.engine import BuilderEngine
+    eng = BuilderEngine(output_dir=str(tmp_path / "builder"))
+    path = eng.generate_module("my_module", "Test module")
+    import os
+    assert os.path.isfile(path)
+    content = open(path).read()
+    assert "my_module" in content
+    assert "class" in content.lower() or "def" in content.lower()
+
+
+def test_builder_engine_generates_script(tmp_path):
+    from aura.builder.engine import BuilderEngine
+    eng = BuilderEngine(output_dir=str(tmp_path / "builder"))
+    path = eng.generate_script("my_script", "Test script")
+    import os
+    assert os.path.isfile(path)
+    content = open(path).read()
+    assert "#!/" in content
+    assert "my_script" in content
+
+
+def test_builder_engine_generates_config(tmp_path):
+    from aura.builder.engine import BuilderEngine
+    eng = BuilderEngine(output_dir=str(tmp_path / "builder"))
+    path = eng.generate_config("my_config", {"key": "value"})
+    import os, json
+    assert os.path.isfile(path)
+    data = json.loads(open(path).read())
+    assert data["name"] == "my_config"
+    assert data["key"] == "value"
+
+
+def test_builder_engine_list_generated(tmp_path):
+    from aura.builder.engine import BuilderEngine
+    eng = BuilderEngine(output_dir=str(tmp_path / "builder"))
+    eng.generate_module("mod_a")
+    eng.generate_script("scr_b")
+    eng.generate_config("cfg_c")
+    items = eng.list_generated()
+    assert len(items) == 3
+    types = {i["type"] for i in items}
+    assert "module" in types
+    assert "script" in types
+    assert "config" in types
+
+
+def test_builder_engine_metrics(tmp_path):
+    from aura.builder.engine import BuilderEngine
+    eng = BuilderEngine(output_dir=str(tmp_path / "builder"))
+    eng.generate_module("x")
+    eng.generate_module("y")
+    m = eng.metrics()
+    assert m["modules_generated"] == 2
+    assert m["scripts_generated"] == 0
+    assert m["modules_generated"] + m["scripts_generated"] + m["configs_generated"] == 2
+
+
+# ---------------------------------------------------------------------------
+# ModuleTemplate / ScriptTemplate / ConfigTemplate
+# ---------------------------------------------------------------------------
+
+def test_module_template_renders():
+    from aura.builder.templates import ModuleTemplate
+    t = ModuleTemplate(name="test_mod", description="A test")
+    src = t.render()
+    assert "test_mod" in src
+    assert "SPDX-License-Identifier" in src
+
+
+def test_script_template_renders():
+    from aura.builder.templates import ScriptTemplate
+    t = ScriptTemplate(name="my_script", description="does things")
+    src = t.render()
+    assert "#!/" in src
+    assert "my_script" in src
+
+
+def test_config_template_renders():
+    from aura.builder.templates import ConfigTemplate
+    import json
+    t = ConfigTemplate(name="my_cfg", defaults={"foo": "bar"})
+    src = t.render()
+    data = json.loads(src)
+    assert data["name"] == "my_cfg"
+    assert data["foo"] == "bar"
+
+
+# ---------------------------------------------------------------------------
+# Config — new sections
+# ---------------------------------------------------------------------------
+
+def test_config_has_vnode():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert cfg.vnode.node_name == "aura-node"
+    assert cfg.vnode.heartbeat_interval_seconds == 30.0
+    assert cfg.vnode.timeout_seconds == 5
+
+
+def test_config_has_remote():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert cfg.remote.enabled is False
+    assert cfg.remote.port == 8765
+    assert cfg.remote.host == "0.0.0.0"
+
+
+def test_config_has_builder():
+    from aura.config import AURaConfig
+    cfg = AURaConfig()
+    assert "builder" in cfg.builder.output_dir
+
+
+def test_config_vnode_from_env(monkeypatch):
+    monkeypatch.setenv("AURA_NODE_NAME", "my-special-node")
+    monkeypatch.setenv("AURA_HEARTBEAT_INTERVAL", "15.0")
+    from aura.config import AURaConfig
+    cfg = AURaConfig.from_env()
+    assert cfg.vnode.node_name == "my-special-node"
+    assert cfg.vnode.heartbeat_interval_seconds == 15.0
+
+
+def test_config_remote_from_env(monkeypatch):
+    monkeypatch.setenv("AURA_REMOTE_ENABLED", "true")
+    monkeypatch.setenv("AURA_REMOTE_PORT", "9999")
+    from aura.config import AURaConfig
+    cfg = AURaConfig.from_env()
+    assert cfg.remote.enabled is True
+    assert cfg.remote.port == 9999
+
+
+# ---------------------------------------------------------------------------
+# AIOS v2.1.0 — virtual node wired in
+# ---------------------------------------------------------------------------
+
+def test_aios_has_vnode_identity(tmp_path):
+    with _make_aios_v2(19160, tmp_path) as aios:
+        assert aios.vnode_identity is not None
+        assert aios.vnode_identity.node_id
+
+
+def test_aios_has_mesh_bus(tmp_path):
+    with _make_aios_v2(19161, tmp_path) as aios:
+        assert aios.mesh_bus is not None
+
+
+def test_aios_has_builder_engine(tmp_path):
+    with _make_aios_v2(19162, tmp_path) as aios:
+        assert aios.builder_engine is not None
+
+
+def test_aios_dispatch_vnode_status(tmp_path):
+    with _make_aios_v2(19163, tmp_path) as aios:
+        out = aios.dispatch("vnode", ["status"])
+        assert "Virtual Node Status" in out
+        assert "node_id" in out
+        assert "capabilities" in out
+
+
+def test_aios_dispatch_vnode_peers(tmp_path):
+    with _make_aios_v2(19164, tmp_path) as aios:
+        out = aios.dispatch("vnode", ["peers"])
+        assert isinstance(out, str)
+
+
+def test_aios_dispatch_vnode_id(tmp_path):
+    with _make_aios_v2(19165, tmp_path) as aios:
+        out = aios.dispatch("vnode", ["id"])
+        import uuid
+        try:
+            uuid.UUID(out.strip())
+        except ValueError:
+            pytest.fail(f"vnode id output is not a valid UUID: {out!r}")
+
+
+def test_aios_dispatch_remote_status_disabled(tmp_path):
+    with _make_aios_v2(19166, tmp_path) as aios:
+        out = aios.dispatch("remote", ["status"])
+        assert "disabled" in out.lower() or "Remote" in out
+
+
+def test_aios_dispatch_builder_status(tmp_path):
+    with _make_aios_v2(19167, tmp_path) as aios:
+        out = aios.dispatch("builder", ["status"])
+        assert "Builder Engine" in out
+
+
+def test_aios_dispatch_builder_module(tmp_path):
+    with _make_aios_v2(19168, tmp_path) as aios:
+        out = aios.dispatch("builder", ["module", "hello_world", "A hello module"])
+        assert "generated" in out.lower()
+        assert "hello_world" in out
+
+
+def test_aios_dispatch_builder_list(tmp_path):
+    with _make_aios_v2(19169, tmp_path) as aios:
+        aios.dispatch("builder", ["module", "list_test"])
+        out = aios.dispatch("builder", ["list"])
+        assert "list_test" in out
+
+
+def test_aios_help_includes_vnode(tmp_path):
+    with _make_aios_v2(19170, tmp_path) as aios:
+        out = aios.dispatch("help")
+        assert "vnode" in out
+        assert "remote" in out
+        assert "builder" in out
+
+
+def test_aios_metrics_includes_vnode(tmp_path):
+    with _make_aios_v2(19171, tmp_path) as aios:
+        m = aios.metrics()
+        assert "vnode" in m
+        assert "heartbeat" in m
+        assert "mesh" in m
+        assert "builder" in m
+
+
+def test_aios_vnode_register_no_cc(tmp_path):
+    """vnode register sub-command returns graceful failure when no Command Center."""
+    with _make_aios_v2(19172, tmp_path) as aios:
+        out = aios.dispatch("vnode", ["register"])
+        assert "FAILED" in out or "OK" in out

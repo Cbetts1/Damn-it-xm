@@ -87,6 +87,14 @@ from aura.command_center.mirror import MirrorService
 from aura.resources.intelligence_index import IntelligenceIndex
 from branding.banner import get_boot_banner
 
+# v2.1.0 virtual network node + remote control + builder engine
+from aura.vnode.identity import VNodeIdentity
+from aura.vnode.registry import VNodeRegistry
+from aura.vnode.heartbeat import HeartbeatService
+from aura.vnode.mesh import MeshBus
+from aura.remote.server import RemoteControlServer
+from aura.builder.engine import BuilderEngine
+
 _logger = get_logger("aura.os")
 
 # ---------------------------------------------------------------------------
@@ -185,6 +193,14 @@ class AIOS:
         # v2.0.0 mirror + intelligence index
         self._mirror: Optional[MirrorService] = None
         self._intelligence_index: Optional[IntelligenceIndex] = None
+
+        # v2.1.0 virtual network node + remote control + builder
+        self._vnode_identity: Optional[VNodeIdentity] = None
+        self._vnode_registry: Optional[VNodeRegistry] = None
+        self._heartbeat: Optional[HeartbeatService] = None
+        self._mesh_bus: Optional[MeshBus] = None
+        self._remote_server: Optional[RemoteControlServer] = None
+        self._builder_engine: Optional[BuilderEngine] = None
 
         # Event subscriptions
         EVENT_BUS.subscribe("*", self._on_event)
@@ -387,6 +403,35 @@ class AIOS:
     def cloud_ai_router(self) -> CloudAIRouter:
         assert self._cloud_ai_router is not None, "AIOS not started"
         return self._cloud_ai_router
+
+    @property
+    def vnode_identity(self) -> VNodeIdentity:
+        assert self._vnode_identity is not None, "AIOS not started"
+        return self._vnode_identity
+
+    @property
+    def vnode_registry(self) -> VNodeRegistry:
+        assert self._vnode_registry is not None, "AIOS not started"
+        return self._vnode_registry
+
+    @property
+    def heartbeat(self) -> HeartbeatService:
+        assert self._heartbeat is not None, "AIOS not started"
+        return self._heartbeat
+
+    @property
+    def mesh_bus(self) -> MeshBus:
+        assert self._mesh_bus is not None, "AIOS not started"
+        return self._mesh_bus
+
+    @property
+    def remote_server(self) -> Optional[RemoteControlServer]:
+        return self._remote_server
+
+    @property
+    def builder_engine(self) -> BuilderEngine:
+        assert self._builder_engine is not None, "AIOS not started"
+        return self._builder_engine
 
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
@@ -700,6 +745,52 @@ class AIOS:
             ollama_config=self._config.ollama,
         )
 
+        # v2.1.0 Virtual Network Node — gives this installation a stable identity
+        # and allows it to act as a node in a virtual mesh of repos.
+        self._logger.info("[+] Initialising Virtual Network Node…")
+        self._vnode_identity = VNodeIdentity(
+            node_name=self._config.vnode.node_name,
+        )
+        self._vnode_registry = VNodeRegistry(
+            identity=self._vnode_identity,
+            command_center_url=self._config.vnode.command_center_url,
+            timeout_seconds=self._config.vnode.timeout_seconds,
+        )
+        self._heartbeat = HeartbeatService(
+            identity=self._vnode_identity,
+            command_center_url=self._config.vnode.command_center_url,
+            interval_seconds=self._config.vnode.heartbeat_interval_seconds,
+        )
+        self._mesh_bus = MeshBus()
+        # Register self as a peer in the mesh
+        self._mesh_bus.register_peer(
+            self._vnode_identity.node_id,
+            self._vnode_identity.capabilities,
+        )
+        # Attempt to register with Command Center (non-blocking — fails gracefully)
+        self._vnode_registry.register()
+        self._heartbeat.start()
+
+        # v2.1.0 Remote TCP/HTTP control server (Termux-safe, no root required)
+        if self._config.remote.enabled:
+            self._logger.info(
+                "[+] Starting Remote Control Server on %s:%d…",
+                self._config.remote.host,
+                self._config.remote.port,
+            )
+            self._remote_server = RemoteControlServer(
+                web_api=self._web_api,
+                host=self._config.remote.host,
+                port=self._config.remote.port,
+                auth_token=self._config.remote.auth_token,
+            )
+            self._remote_server.start()
+
+        # v2.1.0 Builder Engine — self-expansion / module generator
+        self._builder_engine = BuilderEngine(
+            output_dir=self._config.builder.output_dir,
+        )
+
         # Restore persisted state (history, extra models)
         self._load_state()
 
@@ -723,6 +814,12 @@ class AIOS:
             self._config.ollama.base_url,
             "enabled" if self._config.ollama.use_cloud_router else "disabled",
         )
+        self._logger.info("  VNode     : %s [%s]", self._vnode_identity.node_name, self._vnode_identity.node_id[:8])
+        self._logger.info(
+            "  Remote    : %s",
+            f"http://{self._config.remote.host}:{self._config.remote.port}" if self._config.remote.enabled else "disabled",
+        )
+        self._logger.info("  Builder   : %s", self._config.builder.output_dir)
         self._logger.info("=" * 60)
 
         EVENT_BUS.publish("aios.started", {"version": self.VERSION})
@@ -734,6 +831,11 @@ class AIOS:
         self._logger.info("AURa AI OS shutting down…")
         # Persist state before tearing down subsystems
         self._save_state()
+        # Stop v2.1.0 subsystems
+        if self._heartbeat:
+            self._heartbeat.stop()
+        if self._remote_server:
+            self._remote_server.stop()
         # Stop v2.0.0 kernel services
         if self._cron:
             self._cron.stop()
@@ -836,6 +938,13 @@ class AIOS:
                 "count": len(self._mirror.list_mirrors()) if self._mirror else 0,
             },
             "cloud_ai_router": self._cloud_ai_router.metrics() if self._cloud_ai_router else {},
+            # v2.1.0 virtual node + remote + builder
+            "vnode": self._vnode_identity.to_dict() if self._vnode_identity else {},
+            "vnode_registry": self._vnode_registry.metrics() if self._vnode_registry else {},
+            "heartbeat": self._heartbeat.metrics() if self._heartbeat else {},
+            "mesh": self._mesh_bus.metrics() if self._mesh_bus else {},
+            "remote_server": self._remote_server.metrics() if self._remote_server else {},
+            "builder": self._builder_engine.metrics() if self._builder_engine else {},
             "timestamp": utcnow(),
         }
 
@@ -1132,7 +1241,7 @@ class AIOS:
 
         elif cmd in ("help", "?"):
             base = (
-                "AURa OS v2.0.0 Commands:\n"
+                "AURa OS v2.1.0 Commands:\n"
                 "  status        — system health overview\n"
                 "  metrics       — detailed component metrics\n"
                 "  cloud         — virtual cloud metrics\n"
@@ -1181,6 +1290,9 @@ class AIOS:
                 "  personality   — AI personality kernel status\n"
                 "  modelreg      — AI model registry\n"
                 "  banner        — show AURA boot banner\n"
+                "  vnode …       — virtual network node (status/peers/register/id)\n"
+                "  remote …      — remote control server (status/start/stop)\n"
+                "  builder …     — builder engine (status/module/script/config/list)\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
@@ -1722,6 +1834,121 @@ class AIOS:
         elif cmd == "banner":
             from branding.banner import get_boot_banner
             return get_boot_banner(self.VERSION)
+
+        elif cmd == "vnode":
+            sub = args[0] if args else "status"
+            if sub == "status":
+                if self._vnode_identity is None:
+                    return "VNode not initialised."
+                d = self._vnode_identity.to_dict()
+                reg = self._vnode_registry.metrics() if self._vnode_registry else {}
+                hb = self._heartbeat.metrics() if self._heartbeat else {}
+                return (
+                    f"Virtual Node Status\n"
+                    f"  node_id      : {d['node_id']}\n"
+                    f"  node_name    : {d['node_name']}\n"
+                    f"  platform     : {d['platform']}\n"
+                    f"  version      : {d['version']}\n"
+                    f"  fingerprint  : {d['fingerprint'][:16]}…\n"
+                    f"  capabilities : {', '.join(d['capabilities'])}\n"
+                    f"  registered   : {reg.get('registration_status', 'unknown')}\n"
+                    f"  cmd_center   : {reg.get('command_center_url', 'none') or 'none'}\n"
+                    f"  heartbeat    : {'running' if hb.get('is_running') else 'stopped'} "
+                    f"(beats={hb.get('beat_count', 0)})"
+                )
+            elif sub == "peers":
+                if self._mesh_bus is None:
+                    return "Mesh bus not available."
+                peers = self._mesh_bus.list_peers()
+                if not peers:
+                    return "No peers registered."
+                lines = [f"Mesh peers ({len(peers)}):"]
+                for p in peers:
+                    caps = ", ".join(p.get("capabilities", []))
+                    lines.append(f"  {p['node_id'][:16]}  caps=[{caps}]")
+                return "\n".join(lines)
+            elif sub == "register":
+                if self._vnode_registry is None:
+                    return "VNode registry not initialised."
+                ok = self._vnode_registry.register()
+                return f"Registration: {'OK' if ok else 'FAILED (see logs)'}"
+            elif sub == "id":
+                return self._vnode_identity.node_id if self._vnode_identity else "not initialised"
+            else:
+                return "vnode sub-commands: status | peers | register | id"
+
+        elif cmd == "remote":
+            sub = args[0] if args else "status"
+            if sub == "status":
+                if self._remote_server is None:
+                    return f"Remote control server: disabled (set AURA_REMOTE_ENABLED=true to enable)"
+                m = self._remote_server.metrics()
+                return (
+                    f"Remote Control Server\n"
+                    f"  address       : {m['address']}\n"
+                    f"  running       : {m['is_running']}\n"
+                    f"  requests      : {m['requests_handled']}\n"
+                    f"  auth          : {'enabled' if m['auth_enabled'] else 'disabled'}"
+                )
+            elif sub == "start":
+                if self._remote_server is None:
+                    self._remote_server = RemoteControlServer(
+                        web_api=self._web_api,
+                        host=self._config.remote.host,
+                        port=self._config.remote.port,
+                        auth_token=self._config.remote.auth_token,
+                    )
+                    self._remote_server.start()
+                    return f"Remote server started on {self._remote_server.address}"
+                return "Remote server already initialised."
+            elif sub == "stop":
+                if self._remote_server:
+                    self._remote_server.stop()
+                    return "Remote server stopped."
+                return "Remote server not running."
+            else:
+                return "remote sub-commands: status | start | stop"
+
+        elif cmd == "builder":
+            sub = args[0] if args else "status"
+            if sub == "status":
+                if self._builder_engine is None:
+                    return "Builder engine not initialised."
+                m = self._builder_engine.metrics()
+                return (
+                    f"Builder Engine\n"
+                    f"  output_dir      : {m['output_dir']}\n"
+                    f"  modules_gen     : {m['modules_generated']}\n"
+                    f"  scripts_gen     : {m['scripts_generated']}\n"
+                    f"  configs_gen     : {m['configs_generated']}\n"
+                f"  total_artefacts : {m['modules_generated'] + m['scripts_generated'] + m['configs_generated']}"
+                )
+            elif sub == "module" and len(args) >= 2:
+                name = args[1]
+                desc = " ".join(args[2:]) if len(args) > 2 else ""
+                path = self._builder_engine.generate_module(name, desc)
+                return f"Module generated: {path}"
+            elif sub == "script" and len(args) >= 2:
+                name = args[1]
+                desc = " ".join(args[2:]) if len(args) > 2 else ""
+                path = self._builder_engine.generate_script(name, desc)
+                return f"Script generated: {path}"
+            elif sub == "config" and len(args) >= 2:
+                name = args[1]
+                path = self._builder_engine.generate_config(name)
+                return f"Config generated: {path}"
+            elif sub == "list":
+                if self._builder_engine is None:
+                    return "Builder engine not initialised."
+                items = self._builder_engine.list_generated()
+                if not items:
+                    return "No artefacts generated yet."
+                lines = [f"Builder artefacts ({len(items)}):"]
+                for it in items:
+                    lines.append(f"  [{it['type']:<8}] {it['name']:<24} {it['path']}")
+                return "\n".join(lines)
+            else:
+                return "builder sub-commands: status | module <name> [desc] | script <name> [desc] | config <name> | list"
 
         elif cmd in self._commands:
             # Custom registered command

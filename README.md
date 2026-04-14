@@ -6,7 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-yellow?style=flat-square)](https://www.python.org)
 [![Termux](https://img.shields.io/badge/Termux-compatible-orange?style=flat-square)](https://termux.dev)
-[![Tests](https://img.shields.io/badge/tests-337%20passed-brightgreen?style=flat-square)](tests/test_aura.py)
+[![Tests](https://img.shields.io/badge/tests-382%20passed-brightgreen?style=flat-square)](tests/test_aura.py)
+[![CI](https://github.com/Cbetts1/Damn-it-xm/actions/workflows/ci.yml/badge.svg)](https://github.com/Cbetts1/Damn-it-xm/actions/workflows/ci.yml)
 
 ![AURa Command Center Dashboard](https://github.com/user-attachments/assets/32a944d2-8ac8-4b53-8c10-eddc05c0de3d)
 

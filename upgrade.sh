@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-#  AURa v1.2.0 — One-Command Upgrade Script (Termux & Linux)
+#  AURa v2.0.0 — One-Command Upgrade Script (Termux & Linux)
 # ──────────────────────────────────────────────────────────────
 # Usage:
 #   bash upgrade.sh          (from the repo root)

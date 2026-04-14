@@ -95,6 +95,18 @@ from aura.vnode.mesh import MeshBus
 from aura.remote.server import RemoteControlServer
 from aura.builder.engine import BuilderEngine
 
+# v2.2.0 resource layer, task scheduler, metrics, orchestration
+from aura.resources.ram import VirtualRAM
+from aura.resources.ledger import ResourceLedger
+from aura.resources.quota import QuotaEnforcer
+from aura.scheduler.scheduler import TaskScheduler
+from aura.metrics.timeseries import TimeSeriesBuffer
+from aura.metrics.collector import MetricsCollector
+from aura.metrics.health import HealthProbe
+from aura.orchestration.tool_registry import ToolRegistry
+from aura.orchestration.runner import WorkloadRunner
+from aura.orchestration.pipeline import Pipeline, PipelineStep
+
 _logger = get_logger("aura.os")
 
 # ---------------------------------------------------------------------------
@@ -201,6 +213,22 @@ class AIOS:
         self._mesh_bus: Optional[MeshBus] = None
         self._remote_server: Optional[RemoteControlServer] = None
         self._builder_engine: Optional[BuilderEngine] = None
+
+        # v2.2.0 resource layer
+        self._ram: Optional[VirtualRAM] = None
+        self._ledger: Optional[ResourceLedger] = None
+        self._quota: Optional[QuotaEnforcer] = None
+
+        # v2.2.0 task scheduler
+        self._scheduler: Optional[TaskScheduler] = None
+
+        # v2.2.0 metrics layer
+        self._timeseries: Optional[TimeSeriesBuffer] = None
+        self._metrics_collector: Optional[MetricsCollector] = None
+
+        # v2.2.0 orchestration layer
+        self._tool_registry: Optional[ToolRegistry] = None
+        self._workload_runner: Optional[WorkloadRunner] = None
 
         # Event subscriptions
         EVENT_BUS.subscribe("*", self._on_event)
@@ -433,6 +461,46 @@ class AIOS:
         assert self._builder_engine is not None, "AIOS not started"
         return self._builder_engine
 
+    @property
+    def ram(self) -> VirtualRAM:
+        assert self._ram is not None, "AIOS not started"
+        return self._ram
+
+    @property
+    def ledger(self) -> ResourceLedger:
+        assert self._ledger is not None, "AIOS not started"
+        return self._ledger
+
+    @property
+    def quota(self) -> QuotaEnforcer:
+        assert self._quota is not None, "AIOS not started"
+        return self._quota
+
+    @property
+    def scheduler(self) -> TaskScheduler:
+        assert self._scheduler is not None, "AIOS not started"
+        return self._scheduler
+
+    @property
+    def timeseries(self) -> TimeSeriesBuffer:
+        assert self._timeseries is not None, "AIOS not started"
+        return self._timeseries
+
+    @property
+    def metrics_collector(self) -> MetricsCollector:
+        assert self._metrics_collector is not None, "AIOS not started"
+        return self._metrics_collector
+
+    @property
+    def tool_registry(self) -> ToolRegistry:
+        assert self._tool_registry is not None, "AIOS not started"
+        return self._tool_registry
+
+    @property
+    def workload_runner(self) -> WorkloadRunner:
+        assert self._workload_runner is not None, "AIOS not started"
+        return self._workload_runner
+
     # ------------------------------------------------------------------
     # Plugin registry — custom shell commands
     # ------------------------------------------------------------------
@@ -631,6 +699,23 @@ class AIOS:
         self._cpu = VirtualCPU(self._config.cpu)
         self._cpu.start()
 
+        # 4a. v2.2.0 Resource layer — RAM pool, ledger, quota enforcer
+        self._logger.info("[4a/9] Initialising resource layer…")
+        self._ram = VirtualRAM(total_mb=32_768.0)
+        self._ledger = ResourceLedger()
+        self._quota = QuotaEnforcer(self._ram)
+
+        # 4b. v2.2.0 Task scheduler — resource-aware wrapper around VirtualCPU
+        self._logger.info("[4b/9] Starting task scheduler…")
+        self._scheduler = TaskScheduler(self._cpu, self._ram, self._ledger, self._quota)
+        self._scheduler.start()
+
+        # 4c. v2.2.0 Orchestration layer — tool registry + workload runner
+        self._logger.info("[4c/9] Initialising orchestration layer…")
+        self._tool_registry = ToolRegistry()
+        self._tool_registry.discover()
+        self._workload_runner = WorkloadRunner(self._scheduler, self._tool_registry)
+
         # 5. Virtual Server (HTTP API + dashboard)
         self._logger.info("[5/9] Starting Virtual Server (port %d)…", self._config.server.port)
         self._server = VirtualServer(self._config.server)
@@ -721,6 +806,16 @@ class AIOS:
             "web-api",
             start_fn=lambda: None,
         )
+        self._service_manager.register(
+            "task-scheduler",
+            start_fn=lambda: None,
+            stop_fn=lambda: self._scheduler.stop() if self._scheduler else None,
+        )
+        self._service_manager.register(
+            "metrics-collector",
+            start_fn=lambda: None,
+            stop_fn=lambda: self._metrics_collector.stop() if self._metrics_collector else None,
+        )
 
         # Register the AI model in the cloud registry
         self._cloud.register_model(
@@ -791,6 +886,12 @@ class AIOS:
             output_dir=self._config.builder.output_dir,
         )
 
+        # v2.2.0 Metrics collector — starts LAST so all subsystems are ready
+        self._logger.info("[+] Starting metrics collector…")
+        self._timeseries = TimeSeriesBuffer()
+        self._metrics_collector = MetricsCollector(self, self._timeseries)
+        self._metrics_collector.start()
+
         # Restore persisted state (history, extra models)
         self._load_state()
 
@@ -820,6 +921,9 @@ class AIOS:
             f"http://{self._config.remote.host}:{self._config.remote.port}" if self._config.remote.enabled else "disabled",
         )
         self._logger.info("  Builder   : %s", self._config.builder.output_dir)
+        self._logger.info("  Scheduler : resource-aware (RAM=32 GB pool, ledger, quota)")
+        self._logger.info("  Orchestration: tool_registry + workload_runner")
+        self._logger.info("  Metrics   : collector running (interval=5s, ts buffer)")
         self._logger.info("=" * 60)
 
         EVENT_BUS.publish("aios.started", {"version": self.VERSION})
@@ -836,6 +940,11 @@ class AIOS:
             self._heartbeat.stop()
         if self._remote_server:
             self._remote_server.stop()
+        # Stop v2.2.0 subsystems
+        if self._metrics_collector:
+            self._metrics_collector.stop()
+        if self._scheduler:
+            self._scheduler.stop()
         # Stop v2.0.0 kernel services
         if self._cron:
             self._cron.stop()
@@ -945,6 +1054,12 @@ class AIOS:
             "mesh": self._mesh_bus.metrics() if self._mesh_bus else {},
             "remote_server": self._remote_server.metrics() if self._remote_server else {},
             "builder": self._builder_engine.metrics() if self._builder_engine else {},
+            # v2.2.0 resource layer + scheduler + metrics + orchestration
+            "scheduler": self._scheduler.metrics() if self._scheduler else {},
+            "ram": self._ram.usage() if self._ram else {},
+            "ledger": self._ledger.summary() if self._ledger else {},
+            "tool_registry": {"tools": len(self._tool_registry.list_tools())} if self._tool_registry else {},
+            "timeseries_keys": self._timeseries.keys() if self._timeseries else [],
             "timestamp": utcnow(),
         }
 
@@ -1241,7 +1356,7 @@ class AIOS:
 
         elif cmd in ("help", "?"):
             base = (
-                "AURa OS v2.1.0 Commands:\n"
+                "AURa OS v2.2.0 Commands:\n"
                 "  status        — system health overview\n"
                 "  metrics       — detailed component metrics\n"
                 "  cloud         — virtual cloud metrics\n"
@@ -1293,6 +1408,9 @@ class AIOS:
                 "  vnode …       — virtual network node (status/peers/register/id)\n"
                 "  remote …      — remote control server (status/start/stop)\n"
                 "  builder …     — builder engine (status/module/script/config/list)\n"
+                "  scheduler …   — task scheduler (status/tasks/ram/ledger)\n"
+                "  tools …       — orchestration tools (list/discover)\n"
+                "  timeseries …  — metrics time-series (keys/get <key>)\n"
                 "  help          — show this help\n"
                 "  exit / quit   — exit the AURa shell"
             )
@@ -1949,6 +2067,87 @@ class AIOS:
                 return "\n".join(lines)
             else:
                 return "builder sub-commands: status | module <name> [desc] | script <name> [desc] | config <name> | list"
+
+        elif cmd == "scheduler":
+            if self._scheduler is None:
+                return "scheduler: not initialised"
+            sub = args[0].lower() if args else "status"
+            if sub == "status":
+                m = self._scheduler.metrics()
+                return (
+                    f"Task Scheduler\n"
+                    f"  Total submitted : {m['total_submitted']}\n"
+                    f"  Running         : {m['running']}\n"
+                    f"  Pending         : {m['pending']}\n"
+                    f"  Completed       : {m['completed']}\n"
+                    f"  Failed          : {m['failed']}"
+                )
+            elif sub == "tasks":
+                tasks = self._scheduler.list_tasks(limit=20)
+                if not tasks:
+                    return "scheduler: no tasks"
+                lines = [f"Recent tasks ({len(tasks)}):"]
+                for t in tasks:
+                    lines.append(
+                        f"  [{t['state']:<10}] {t['name']:<28} cpu={t['cpu_ms']:.0f}ms"
+                    )
+                return "\n".join(lines)
+            elif sub == "ram":
+                u = self._ram.usage() if self._ram else {}
+                return (
+                    f"Virtual RAM Pool\n"
+                    f"  Total  : {u.get('total_mb', 0):.0f} MB\n"
+                    f"  Used   : {u.get('used_mb', 0):.1f} MB\n"
+                    f"  Free   : {u.get('free_mb', 0):.1f} MB\n"
+                    f"  Usage  : {u.get('utilisation_pct', 0):.1f}%"
+                )
+            elif sub == "ledger":
+                s = self._ledger.summary() if self._ledger else {}
+                return (
+                    f"Resource Ledger\n"
+                    f"  Total tasks : {s.get('total_tasks', 0)}\n"
+                    f"  CPU ms total: {s.get('total_cpu_ms', 0):.0f}\n"
+                    f"  By status   : {s.get('by_status', {})}"
+                )
+            else:
+                return "scheduler sub-commands: status | tasks | ram | ledger"
+
+        elif cmd == "tools":
+            if self._tool_registry is None:
+                return "tools: not initialised"
+            sub = args[0].lower() if args else "list"
+            if sub == "list" or not sub:
+                tools = self._tool_registry.list_tools()
+                if not tools:
+                    return "tools: none discovered"
+                lines = [f"Orchestration Tools ({len(tools)} available):"]
+                for t in tools:
+                    lines.append(f"  {t['name']:<16} {t['path']}")
+                return "\n".join(lines)
+            elif sub == "discover":
+                found = self._tool_registry.discover()
+                return f"Discovered {len(found)} tool(s): {', '.join(found) or 'none'}"
+            else:
+                return "tools sub-commands: list | discover"
+
+        elif cmd == "timeseries":
+            if self._timeseries is None:
+                return "timeseries: not initialised"
+            sub = args[0].lower() if args else "keys"
+            if sub == "keys" or not sub:
+                keys = self._timeseries.keys()
+                return ("Time-series keys:\n" + "\n".join(f"  {k}" for k in keys)) if keys else "timeseries: no data yet"
+            elif sub == "get" and len(args) >= 2:
+                key = args[1]
+                points = self._timeseries.get(key, last_n=10)
+                if not points:
+                    return f"timeseries: no data for key {key!r}"
+                lines = [f"Last {len(points)} points for {key!r}:"]
+                for p in points:
+                    lines.append(f"  {p['ts']}  {p['value']:.4f}")
+                return "\n".join(lines)
+            else:
+                return "timeseries sub-commands: keys | get <key>"
 
         elif cmd in self._commands:
             # Custom registered command

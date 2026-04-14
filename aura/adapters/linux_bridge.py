@@ -8,11 +8,10 @@ import os
 import platform
 from typing import Dict, List, Optional
 
-from aura.utils import get_logger
-from aura.adapters.android_bridge import detect_capabilities
+from aura.adapters.posix_bridge import PosixBridge
 
 
-class LinuxBridge:
+class LinuxBridge(PosixBridge):
     """
     Linux-specific platform adapter for AURa.
 
@@ -20,10 +19,7 @@ class LinuxBridge:
     environment and AURa's virtual OS environment.
     """
 
-    def __init__(self, capabilities: Optional[Dict] = None) -> None:
-        self._caps = capabilities or detect_capabilities()
-        self._log = get_logger("aura.adapters.linux")
-        self._log.debug("LinuxBridge initialised (platform=%s).", self._caps.get("platform"))
+    _PLATFORM_NAME = "linux"
 
     def get_kernel_version(self) -> str:
         """Return the kernel version string, or a virtual fallback."""
@@ -44,14 +40,3 @@ class LinuxBridge:
             "node": platform.node(),
         }
 
-    def list_processes(self) -> List[dict]:
-        """Return a process list. In the virtual environment a mock list is used."""
-        return [
-            {"pid": 1, "name": "aura-init", "state": "running"},
-            {"pid": 2, "name": "aura-kernel", "state": "running"},
-            {"pid": 3, "name": "aura-shell", "state": "sleeping"},
-        ]
-
-    def get_network_interfaces(self) -> List[str]:
-        """Return virtual network interface names."""
-        return ["lo", "vnet0"]

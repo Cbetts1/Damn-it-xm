@@ -114,7 +114,7 @@ _BUILTIN_KNOWLEDGE: dict = {
         "I am built on free open-source AI technology.",
     r"hello|hi|hey|greet": "Hello! I'm AURa, your AI OS. How can I assist you today?\n"
         "Type 'help' for a list of commands.",
-    r"version": "AURa v1.3.0 — stable release.",
+    r"version": "AURa v2.0.0 — stable release.",
 }
 
 
@@ -359,6 +359,25 @@ def _register_ollama_backend() -> None:
     _BACKEND_REGISTRY["ollama"] = _OllamaAdaptor
 
 _register_ollama_backend()
+
+
+def _register_llama_backend() -> None:
+    """Register the llama.cpp backend lazily under the name 'llama'."""
+    class _LlamaAdaptor(BaseBackend):
+        """Thin adaptor so LlamaBackend works through the standard registry."""
+        def __init__(self, config: AIEngineConfig) -> None:
+            from aura.ai_engine.llama_backend import LlamaBackend as _LB
+            model_path = getattr(config, "model_path", "") or ""
+            self._inner = _LB(config, model_path=model_path)
+        def is_ready(self) -> bool:
+            return self._inner.is_ready()
+        def generate(self, prompt: str, system_prompt: str = "", **kwargs) -> "AIResponse":
+            return self._inner.generate(prompt, **kwargs)
+        def stream(self, prompt: str, system_prompt: str = "", **kwargs):
+            yield self._inner.generate(prompt, **kwargs).text
+    _BACKEND_REGISTRY["llama"] = _LlamaAdaptor
+
+_register_llama_backend()
 
 
 def register_backend(name: str, cls: type) -> None:
